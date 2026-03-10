@@ -21,10 +21,19 @@ function saveState(state: GameState) {
   localStorage.setItem(SAVE_KEY, JSON.stringify(state));
 }
 
+export interface AnimationState {
+  recentHits: Map<string, number>;    // keyCode -> timestamp
+  recentHarvests: Map<string, number>; // keyCode -> timestamp
+}
+
 export function useGameState() {
   const [gameState, setGameState] = useState<GameState>(loadState);
   const stateRef = useRef(gameState);
   stateRef.current = gameState;
+  const animRef = useRef<AnimationState>({
+    recentHits: new Map(),
+    recentHarvests: new Map(),
+  });
 
   // Auto-save every 10 seconds
   useEffect(() => {
@@ -41,6 +50,7 @@ export function useGameState() {
   useEffect(() => {
     const unlisten = listen<{ key_code: string }>('key-press', (event) => {
       const keyCode = event.payload.key_code;
+      animRef.current.recentHits.set(keyCode, Date.now());
       setGameState((prev) => {
         const cell = prev.cells[keyCode];
         if (!cell || cell.stage === 'fruit') return prev;
@@ -86,6 +96,7 @@ export function useGameState() {
   }, []);
 
   const harvest = useCallback((keyCode: string) => {
+    animRef.current.recentHarvests.set(keyCode, Date.now());
     setGameState((prev) => {
       const cell = prev.cells[keyCode];
       if (!cell || cell.stage !== 'fruit') return prev;
@@ -105,5 +116,5 @@ export function useGameState() {
     });
   }, []);
 
-  return { gameState, harvest };
+  return { gameState, harvest, animations: animRef.current };
 }
