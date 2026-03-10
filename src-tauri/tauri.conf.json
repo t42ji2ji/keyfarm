@@ -12,11 +12,14 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "KeyFarm",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "fullscreen": false
+        "width": 900,
+        "height": 340,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "decorations": false,
+        "resizable": true
       }
     ],
     "security": {
