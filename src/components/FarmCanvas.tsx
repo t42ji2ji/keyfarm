@@ -1,51 +1,96 @@
 import { useRef, useEffect, useCallback } from 'react';
-import { GameState, FarmStage } from '../types/game';
+import type { GameState, FarmStage } from '../types/game';
 import { HHKB_ROWS } from '../data/hhkbLayout';
-import { AnimationState } from '../hooks/useGameState';
+import type { AnimationState } from '../hooks/useGameState';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { CROP_MAP, CROP_PARTICLE_COLORS } from '../data/crops';
+import {
+  computeBlockVertices,
+  computeCanvasBounds,
+  hitTestBlock,
+  darkenColor,
+  fillPoly,
+  polygonCentroid,
+  type IsoBlock,
+} from '../utils/isometric';
 
-const CELL_SIZE = 52;
-const CELL_GAP = 4;
-const PADDING = 16;
+const TILE_W = 64;
+const TILE_H = 32;
+const PADDING = 20;
 const HIT_FLASH_DURATION = 200;
-const HARVEST_SPARKLE_DURATION = 400;
+const HARVEST_DURATION = 700;
+
+const STAGE_DEPTH: Record<FarmStage, number> = {
+  empty: 8,
+  watering: 12,
+  sprout: 16,
+  tree: 22,
+  fruit: 26,
+  fallow: 6,
+  overworked: 10,
+};
+
+const MAX_DEPTH = 26;
 
 const STAGE_COLORS: Record<FarmStage, string> = {
-  empty: '#8B7355',      // brown soil
-  watering: '#4A90D9',   // blue water
-  sprout: '#7EC850',     // light green
-  tree: '#2D8B46',       // dark green
-  fruit: '#FF6B6B',      // red (will vary by fruit)
+  empty: '#8B7355',
+  watering: '#4A90D9',
+  sprout: '#7EC850',
+  tree: '#2D8B46',
+  fruit: '#FF6B6B',
+  fallow: '#8B8B8B',
+  overworked: '#FF4500',
 };
 
-const FRUIT_EMOJI: Record<string, string> = {
-  apple: '\uD83C\uDF4E',
-  orange: '\uD83C\uDF4A',
-  cherry: '\uD83C\uDF52',
-  grape: '\uD83C\uDF47',
-  peach: '\uD83C\uDF51',
-  lemon: '\uD83C\uDF4B',
-};
+const LEFT_FACE_FACTOR = 0.55;
+const FRONT_FACE_FACTOR = 0.75;
 
 const STAGE_EMOJI: Record<FarmStage, string> = {
-  empty: '\uD83D\uDFEB',
+  empty: '',
   watering: '\uD83D\uDCA7',
   sprout: '\uD83C\uDF31',
   tree: '\uD83C\uDF33',
-  fruit: '',  // use fruit-specific emoji
+  fruit: '',
+  fallow: '',
+  overworked: '',
 };
+
+const RARITY_BLOCK_COLORS: Record<string, string> = {
+  common: '#FF6B6B',
+  uncommon: '#4ADE80',
+  rare: '#60A5FA',
+  legendary: '#F59E0B',
+};
+
+// Export canvas dimensions so App can compute scale
+const _bounds = computeCanvasBounds(TILE_W, TILE_H, MAX_DEPTH, PADDING);
+export const CANVAS_WIDTH = _bounds.width;
+export const CANVAS_HEIGHT = _bounds.height;
+
+/** Map mouse event to canvas-pixel coordinates (accounts for CSS transform). */
+function canvasCoords(e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (canvas.width / rect.width),
+    y: (e.clientY - rect.top) * (canvas.height / rect.height),
+  };
+}
 
 interface FarmCanvasProps {
   gameState: GameState;
   animations: AnimationState;
   onHarvest: (keyCode: string) => void;
+  onRemovePest: (keyCode: string) => void;
 }
 
-export function FarmCanvas({ gameState, animations, onHarvest }: FarmCanvasProps) {
+export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: FarmCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const cellRectsRef = useRef<Map<string, { x: number; y: number; w: number; h: number }>>(new Map());
+  const cellBlocksRef = useRef<Map<string, IsoBlock>>(new Map());
   const rafRef = useRef<number>(0);
   const gameStateRef = useRef(gameState);
   gameStateRef.current = gameState;
+
+  const { width: canvasWidth, height: canvasHeight, originX, originY } = _bounds;
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -57,204 +102,376 @@ export function FarmCanvas({ gameState, animations, onHarvest }: FarmCanvasProps
     let hasActiveAnimations = false;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    cellRectsRef.current.clear();
+    cellBlocksRef.current.clear();
 
     HHKB_ROWS.forEach((row, rowIdx) => {
-      let xOffset = PADDING;
-      const y = PADDING + rowIdx * (CELL_SIZE + CELL_GAP);
+      let colOffset = 0;
 
       row.forEach((keyDef) => {
         const cell = gameStateRef.current.cells[keyDef.keyCode];
-        const w = keyDef.width * CELL_SIZE + (keyDef.width - 1) * CELL_GAP;
-        const h = CELL_SIZE;
+        const stage = cell?.stage || 'empty';
+        const depth = STAGE_DEPTH[stage];
 
-        cellRectsRef.current.set(keyDef.keyCode, { x: xOffset, y, w, h });
+        // Determine block color: override for fruit stage based on rarity
+        let color = STAGE_COLORS[stage];
+        if (stage === 'fruit' && cell?.cropId) {
+          const crop = CROP_MAP[cell.cropId];
+          if (crop) color = RARITY_BLOCK_COLORS[crop.rarity];
+        }
 
-        // Check for hit flash animation
+        const block = computeBlockVertices(
+          colOffset, rowIdx, keyDef.width, depth,
+          TILE_W, TILE_H, originX, originY,
+        );
+
+        cellBlocksRef.current.set(keyDef.keyCode, block);
+
+        // Check animations
         const hitTime = animations.recentHits.get(keyDef.keyCode);
         const hitAge = hitTime ? now - hitTime : Infinity;
         const isHitFlashing = hitAge < HIT_FLASH_DURATION;
 
-        // Check for harvest sparkle animation
         const harvestTime = animations.recentHarvests.get(keyDef.keyCode);
         const harvestAge = harvestTime ? now - harvestTime : Infinity;
-        const isHarvestSparkle = harvestAge < HARVEST_SPARKLE_DURATION;
+        const isHarvestSparkle = harvestAge < HARVEST_DURATION;
 
         if (isHitFlashing || isHarvestSparkle) hasActiveAnimations = true;
 
-        // Clean up old animations
         if (hitTime && hitAge > HIT_FLASH_DURATION) {
           animations.recentHits.delete(keyDef.keyCode);
         }
-        if (harvestTime && harvestAge > HARVEST_SPARKLE_DURATION) {
+        if (harvestTime && harvestAge > HARVEST_DURATION) {
           animations.recentHarvests.delete(keyDef.keyCode);
+          animations.harvestFruits.delete(keyDef.keyCode);
+          animations.harvestGolden.delete(keyDef.keyCode);
+        }
+
+        // Pest removal animation cleanup
+        const pestRemovalTime = animations.recentPestRemovals.get(keyDef.keyCode);
+        const pestRemovalAge = pestRemovalTime ? now - pestRemovalTime : Infinity;
+        if (pestRemovalTime && pestRemovalAge > HARVEST_DURATION) {
+          animations.recentPestRemovals.delete(keyDef.keyCode);
         }
 
         ctx.save();
 
-        // Hit flash: scale bounce
+        // Hit flash: scale bounce around top face centroid
         if (isHitFlashing) {
           const progress = hitAge / HIT_FLASH_DURATION;
           const scale = 1 + 0.08 * Math.sin(progress * Math.PI);
-          const cx = xOffset + w / 2;
-          const cy = y + h / 2;
-          ctx.translate(cx, cy);
+          const center = polygonCentroid(block.top);
+          ctx.translate(center.x, center.y);
           ctx.scale(scale, scale);
-          ctx.translate(-cx, -cy);
+          ctx.translate(-center.x, -center.y);
         }
 
-        // Background
-        const stage = cell?.stage || 'empty';
-        ctx.fillStyle = STAGE_COLORS[stage];
+        // Draw 3 faces: right (darkest), front (medium), top (brightest)
+        fillPoly(ctx, block.right, darkenColor(color, LEFT_FACE_FACTOR));
+        fillPoly(ctx, block.front, darkenColor(color, FRONT_FACE_FACTOR));
+        fillPoly(ctx, block.top, color);
 
-        // Hit flash: brighten
+        // Hit flash: white overlay on all faces
         if (isHitFlashing) {
           const progress = hitAge / HIT_FLASH_DURATION;
           const alpha = 0.4 * (1 - progress);
-          ctx.beginPath();
-          ctx.roundRect(xOffset, y, w, h, 8);
-          ctx.fill();
-          ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-          ctx.beginPath();
-          ctx.roundRect(xOffset, y, w, h, 8);
-          ctx.fill();
-        } else {
-          ctx.beginPath();
-          ctx.roundRect(xOffset, y, w, h, 8);
-          ctx.fill();
+          const overlayColor = `rgba(255, 255, 255, ${alpha})`;
+          fillPoly(ctx, block.top, overlayColor, false);
+          fillPoly(ctx, block.right, overlayColor, false);
+          fillPoly(ctx, block.front, overlayColor, false);
         }
 
-        // Emoji
-        const emoji = stage === 'fruit' && cell?.fruitType
-          ? FRUIT_EMOJI[cell.fruitType] || '\uD83C\uDF4E'
-          : STAGE_EMOJI[stage];
+        // Emoji centered on top face
+        const topCenter = polygonCentroid(block.top);
 
-        ctx.font = '24px serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(emoji, xOffset + w / 2, y + h / 2 - 4);
+        let emoji = '';
+        if (stage === 'fruit' && cell?.cropId) {
+          emoji = CROP_MAP[cell.cropId]?.emoji || '\uD83C\uDF4E';
+        } else if (stage === 'fallow') {
+          emoji = '\uD83D\uDCA4';
+        } else if (stage === 'overworked') {
+          emoji = '\uD83D\uDD25';
+        } else {
+          emoji = STAGE_EMOJI[stage] || '';
+        }
 
-        // Key label
-        ctx.font = '10px sans-serif';
-        ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.fillText(keyDef.label, xOffset + w / 2, y + h - 8);
+        if (emoji) {
+          ctx.font = '20px serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(emoji, topCenter.x, topCenter.y - 2);
+        }
 
-        // Progress bar
-        if (cell && stage !== 'fruit' && stage !== 'empty') {
+        // Golden visual effects
+        if (cell?.isGolden && stage === 'fruit') {
+          hasActiveAnimations = true;
+
+          // 1. Gold glow on emoji (redraw with shadow)
+          ctx.save();
+          ctx.shadowColor = '#FFD700';
+          ctx.shadowBlur = 15;
+          ctx.font = '20px serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(CROP_MAP[cell.cropId!]?.emoji || '', topCenter.x, topCenter.y - 2);
+          ctx.restore();
+
+          // 2. Orbiting sparkle particles (3 sparkles rotating)
+          for (let i = 0; i < 3; i++) {
+            const angle = (now / 800) + (Math.PI * 2 * i) / 3;
+            const radius = 12;
+            const sx = topCenter.x + Math.cos(angle) * radius;
+            const sy = topCenter.y + Math.sin(angle) * radius * 0.5 - 2;
+            ctx.font = '8px serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('\u2728', sx, sy);
+          }
+
+          // 3. Gold shimmer on tile top face
+          const shimmerAlpha = 0.15 + 0.1 * Math.sin(now / 300);
+          fillPoly(ctx, block.top, `rgba(255, 215, 0, ${shimmerAlpha})`, false);
+        }
+
+        // Pest overlay (bug with wiggle)
+        if (cell?.hasPest && ['watering', 'sprout', 'tree', 'fruit'].includes(stage)) {
+          hasActiveAnimations = true;
+          const wiggle = Math.sin(now / 150) * 3;
+          ctx.font = '18px serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('\uD83D\uDC1B', topCenter.x + wiggle, topCenter.y - 2);
+        }
+
+        // Overworked countdown
+        if (stage === 'overworked' && cell?.overworkedUntil) {
+          hasActiveAnimations = true;
+          const remaining = Math.max(0, Math.ceil((cell.overworkedUntil - now) / 1000));
+          ctx.font = 'bold 10px sans-serif';
+          ctx.fillStyle = '#FFFFFF';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`${remaining}s`, topCenter.x, topCenter.y + 10);
+        }
+
+        // Fallow timer
+        if (stage === 'fallow' && cell?.fallowUntil) {
+          hasActiveAnimations = true;
+          const remainingSec = Math.max(0, Math.ceil((cell.fallowUntil - now) / 1000));
+          const remainingMin = Math.floor(remainingSec / 60);
+          const remainingS = remainingSec % 60;
+          ctx.font = 'bold 9px sans-serif';
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`${remainingMin}:${String(remainingS).padStart(2, '0')}`, topCenter.x, topCenter.y + 10);
+        }
+
+        // Key label on top face with isometric surface transform
+        if (keyDef.label) {
+          ctx.save();
+          ctx.translate(topCenter.x, topCenter.y + 6);
+          // Isometric basis vectors (normalized) for the top face
+          const nx = TILE_W / 2;
+          const ny = TILE_H / 2;
+          const len = Math.sqrt(nx * nx + ny * ny);
+          ctx.transform(
+            nx / len, ny / len,     // x-axis: NW->NE direction on surface
+            -nx / len, ny / len,    // y-axis: NW->SW direction on surface
+            0, 0,
+          );
+          ctx.font = 'bold 11px sans-serif';
+          ctx.fillStyle = darkenColor(color, 0.65);
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(keyDef.label, 0, 0);
+          ctx.restore();
+        }
+
+        // Progress bar along bottom edge of front face
+        if (cell && stage !== 'fruit' && stage !== 'empty' && stage !== 'fallow' && stage !== 'overworked') {
           const threshold = { watering: 15, sprout: 30, tree: 50 }[stage] || 1;
           const progress = cell.hitCount / threshold;
-          ctx.fillStyle = 'rgba(255,255,255,0.3)';
-          ctx.fillRect(xOffset + 4, y + h - 4, (w - 8) * progress, 2);
+          const bl = block.front[3]; // baseSW
+          const br = block.front[2]; // baseSE
+          // Inset 10% from each end, 3px above bottom edge
+          const startX = bl.x + (br.x - bl.x) * 0.1;
+          const startY = bl.y + (br.y - bl.y) * 0.1 - 3;
+          const fullEndX = bl.x + (br.x - bl.x) * 0.9;
+          const fullEndY = bl.y + (br.y - bl.y) * 0.9 - 3;
+
+          ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(startX, startY);
+          ctx.lineTo(
+            startX + (fullEndX - startX) * progress,
+            startY + (fullEndY - startY) * progress,
+          );
+          ctx.stroke();
         }
 
         ctx.restore();
 
-        // Harvest sparkle overlay (drawn after restore so it's not scaled)
-        if (isHarvestSparkle) {
-          const progress = harvestAge / HARVEST_SPARKLE_DURATION;
-          const cx = xOffset + w / 2;
-          const cy = y + h / 2;
-          const sparkleAlpha = 1 - progress;
-          const sparkleRadius = 8 + progress * 20;
+        // Harvest animation (drawn after restore, above the block)
+        if (isHarvestSparkle && harvestTime) {
+          const progress = harvestAge / HARVEST_DURATION;
+          const center = polygonCentroid(block.top);
+          const cropId = animations.harvestFruits.get(keyDef.keyCode) || 'apple';
+          const harvestEmoji = CROP_MAP[cropId]?.emoji || '\uD83C\uDF4E';
+          const particleColor = CROP_PARTICLE_COLORS[cropId] || '#FF3B30';
+          const wasGolden = animations.harvestGolden.get(keyDef.keyCode) || false;
 
           ctx.save();
-          ctx.globalAlpha = sparkleAlpha;
-          // Draw sparkle particles
-          for (let i = 0; i < 6; i++) {
-            const angle = (Math.PI * 2 * i) / 6 + progress * Math.PI;
-            const sx = cx + Math.cos(angle) * sparkleRadius;
-            const sy = cy + Math.sin(angle) * sparkleRadius;
-            ctx.fillStyle = '#FFD700';
-            ctx.beginPath();
-            ctx.arc(sx, sy, 3 * (1 - progress), 0, Math.PI * 2);
-            ctx.fill();
+
+          // Phase 1: White flash on block (0-25%)
+          if (progress < 0.25) {
+            const flashAlpha = 0.5 * (1 - progress / 0.25);
+            const flashColor = `rgba(255, 255, 255, ${flashAlpha})`;
+            fillPoly(ctx, block.top, flashColor, false);
+            fillPoly(ctx, block.right, flashColor, false);
+            fillPoly(ctx, block.front, flashColor, false);
           }
-          // Center flash
-          ctx.fillStyle = '#FFFFFF';
-          ctx.beginPath();
-          ctx.arc(cx, cy, 12 * (1 - progress), 0, Math.PI * 2);
-          ctx.fill();
+
+          // Phase 2: Emoji floats up, grows, and fades (0-60%)
+          if (progress < 0.6) {
+            const ep = progress / 0.6;
+            const emojiY = center.y - 2 - ep * 35;
+            const emojiScale = 1 + ep * 0.4;
+            ctx.globalAlpha = 1 - ep;
+            ctx.font = `${Math.round(20 * emojiScale)}px serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(harvestEmoji, center.x, emojiY);
+            ctx.globalAlpha = 1;
+          }
+
+          // Phase 3: Colored particle burst (10-90%)
+          if (progress > 0.1 && progress < 0.9) {
+            const bp = (progress - 0.1) / 0.8;
+            ctx.globalAlpha = 1 - bp;
+            for (let i = 0; i < 10; i++) {
+              const angle = (Math.PI * 2 * i) / 10 + ((harvestTime % 628) / 100);
+              const speed = 25 + ((harvestTime * (i + 7)) % 15);
+              const px = center.x + Math.cos(angle) * speed * bp;
+              const py = center.y + Math.sin(angle) * speed * bp
+                         + 30 * bp * bp; // gravity
+              const size = 2.5 * (1 - bp * 0.7);
+              ctx.fillStyle = particleColor;
+              ctx.beginPath();
+              ctx.arc(px, py, size, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+          }
+
+          // Phase 4: Gold sparkle ring (30-100%)
+          if (progress > 0.3) {
+            const sp = (progress - 0.3) / 0.7;
+            ctx.globalAlpha = 0.8 * (1 - sp);
+            const sparkleR = 10 + sp * 25;
+            for (let i = 0; i < 5; i++) {
+              const angle = (Math.PI * 2 * i) / 5 + sp * Math.PI * 1.5;
+              const sx = center.x + Math.cos(angle) * sparkleR;
+              const sy = center.y + Math.sin(angle) * sparkleR * 0.6; // flatten for iso
+              const starSize = 2.5 * (1 - sp);
+              ctx.fillStyle = '#FFD700';
+              ctx.beginPath();
+              ctx.arc(sx, sy, starSize, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+          }
+
+          // Extra gold particle burst for golden harvests
+          if (wasGolden && progress > 0.05 && progress < 0.85) {
+            const bp = (progress - 0.05) / 0.8;
+            ctx.globalAlpha = (1 - bp) * 0.9;
+            for (let i = 0; i < 8; i++) {
+              const angle = (Math.PI * 2 * i) / 8 + ((harvestTime % 314) / 50);
+              const speed = 30 + ((harvestTime * (i + 3)) % 20);
+              const px = center.x + Math.cos(angle) * speed * bp;
+              const py = center.y + Math.sin(angle) * speed * bp * 0.7
+                         + 20 * bp * bp;
+              const size = 3 * (1 - bp * 0.6);
+              ctx.fillStyle = '#FFD700';
+              ctx.beginPath();
+              ctx.arc(px, py, size, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+          }
+
           ctx.restore();
         }
 
-        xOffset += w + CELL_GAP;
+        colOffset += keyDef.width;
       });
     });
 
     if (hasActiveAnimations) {
       rafRef.current = requestAnimationFrame(draw);
     }
-  }, [animations]);
+  }, [animations, originX, originY]);
 
-  // Redraw when gameState changes
   useEffect(() => {
     cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafRef.current);
   }, [gameState, draw]);
 
-  const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    for (const [keyCode, cellRect] of cellRectsRef.current.entries()) {
-      if (
-        x >= cellRect.x && x <= cellRect.x + cellRect.w &&
-        y >= cellRect.y && y <= cellRect.y + cellRect.h
-      ) {
-        const cell = gameStateRef.current.cells[keyCode];
-        if (cell?.stage === 'fruit') {
-          onHarvest(keyCode);
-          // Trigger animation render loop
-          cancelAnimationFrame(rafRef.current);
-          rafRef.current = requestAnimationFrame(draw);
-          return;
-        }
-      }
-    }
-  }, [onHarvest, draw]);
+  const harvestedRef = useRef<Set<string>>(new Set());
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const { x, y } = canvasCoords(e, canvas);
 
     let overFruit = false;
-    for (const [keyCode, cellRect] of cellRectsRef.current.entries()) {
-      if (
-        x >= cellRect.x && x <= cellRect.x + cellRect.w &&
-        y >= cellRect.y && y <= cellRect.y + cellRect.h
-      ) {
+    for (const [keyCode, block] of cellBlocksRef.current.entries()) {
+      if (hitTestBlock(x, y, block)) {
         const cell = gameStateRef.current.cells[keyCode];
+
+        // Pest removal (priority over harvest)
+        if (cell?.hasPest) {
+          overFruit = true; // reuse cursor change
+          if (!harvestedRef.current.has(keyCode + '_pest')) {
+            harvestedRef.current.add(keyCode + '_pest');
+            onRemovePest(keyCode);
+            cancelAnimationFrame(rafRef.current);
+            rafRef.current = requestAnimationFrame(draw);
+          }
+        } else {
+          harvestedRef.current.delete(keyCode + '_pest');
+        }
+
+        // Fruit harvest
         if (cell?.stage === 'fruit') {
           overFruit = true;
-          break;
+          if (!harvestedRef.current.has(keyCode)) {
+            harvestedRef.current.add(keyCode);
+            onHarvest(keyCode);
+            cancelAnimationFrame(rafRef.current);
+            rafRef.current = requestAnimationFrame(draw);
+          }
         }
+      } else {
+        harvestedRef.current.delete(keyCode);
+        harvestedRef.current.delete(keyCode + '_pest');
       }
     }
     canvas.style.cursor = overFruit ? 'grab' : 'default';
+  }, [onHarvest, onRemovePest, draw]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    getCurrentWindow().startDragging();
   }, []);
-
-  // Calculate canvas size
-  const maxRowWidth = HHKB_ROWS.reduce((max, row) => {
-    const rowWidth = row.reduce((sum, k) => sum + k.width * CELL_SIZE + (k.width - 1) * CELL_GAP + CELL_GAP, 0);
-    return Math.max(max, rowWidth);
-  }, 0);
-
-  const canvasWidth = maxRowWidth + PADDING * 2;
-  const canvasHeight = HHKB_ROWS.length * (CELL_SIZE + CELL_GAP) + PADDING * 2;
 
   return (
     <canvas
       ref={canvasRef}
       width={canvasWidth}
       height={canvasHeight}
-      onClick={handleClick}
+      onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       style={{ display: 'block' }}
     />
