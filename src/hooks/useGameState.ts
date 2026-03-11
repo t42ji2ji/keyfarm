@@ -13,7 +13,7 @@ import {
   OVERWORK_DURATION_MS,
   PEST_INTERVAL_MIN_MS,
   PEST_INTERVAL_MAX_MS,
-  PEST_PENALTY_MS,
+  PEST_MAX_CONCURRENT,
   GOLDEN_CHANCE,
 } from '../types/game';
 import { getRandomCrop } from '../data/crops';
@@ -21,12 +21,6 @@ import { createInitialCells } from '../data/hhkbLayout';
 
 const STORE_KEY = 'gameState';
 const store = new LazyStore('store.json');
-
-function getPreviousStage(stage: FarmStage): FarmStage {
-  const order: FarmStage[] = ['empty', 'watering', 'sprout', 'tree', 'fruit'];
-  const idx = order.indexOf(stage);
-  return idx > 0 ? order[idx - 1] : 'empty';
-}
 
 function defaultState(): GameState {
   return {
@@ -301,25 +295,6 @@ export function useGameState() {
             changed = true;
             continue;
           }
-
-          // Pest penalty
-          if (
-            cell.hasPest &&
-            cell.pestSince &&
-            now - cell.pestSince >= PEST_PENALTY_MS
-          ) {
-            const regressedStage = getPreviousStage(cell.stage);
-            newCells[key] = {
-              ...cell,
-              stage: regressedStage,
-              hitCount: 0,
-              hasPest: false,
-              pestSince: null,
-              // Keep cropId (assigned at watering), clear golden (re-rolled at fruit)
-              isGolden: false,
-            };
-            changed = true;
-          }
         }
 
         if (!changed) return prev;
@@ -337,6 +312,12 @@ export function useGameState() {
       const delay = PEST_INTERVAL_MIN_MS + Math.random() * (PEST_INTERVAL_MAX_MS - PEST_INTERVAL_MIN_MS);
       timeout = window.setTimeout(() => {
         setGameState((prev) => {
+          // Check max concurrent pests
+          const currentPests = Object.values(prev.cells).filter(c => c.hasPest).length;
+          if (currentPests >= PEST_MAX_CONCURRENT) {
+            schedulePest();
+            return prev;
+          }
           const candidates = Object.values(prev.cells).filter(
             c => ['watering', 'sprout', 'tree'].includes(c.stage) && !c.hasPest
           );

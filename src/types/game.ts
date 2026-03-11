@@ -66,8 +66,8 @@ export const OVERWORK_PRESS_LIMIT = 30;
 export const OVERWORK_WINDOW_MS = 5_000;
 export const OVERWORK_DURATION_MS = 20_000;
 
-export const PEST_INTERVAL_MIN_MS = 30_000;
-export const PEST_INTERVAL_MAX_MS = 60_000;
-export const PEST_PENALTY_MS = 30_000;
+export const PEST_INTERVAL_MIN_MS = 90_000;    // 90 seconds
+export const PEST_INTERVAL_MAX_MS = 180_000;   // 180 seconds
+export const PEST_MAX_CONCURRENT = 2;          // max pests on board at once
 
 export const GOLDEN_CHANCE = 0.01;

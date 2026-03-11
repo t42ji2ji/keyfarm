@@ -16,7 +16,7 @@ import {
 
 const TILE_W = 64;
 const TILE_H = 32;
-const PADDING = 20;
+const PADDING = 40;
 const HIT_FLASH_DURATION = 200;
 const HARVEST_DURATION = 700;
 
@@ -146,9 +146,11 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: F
           animations.harvestGolden.delete(keyDef.keyCode);
         }
 
-        // Pest removal animation cleanup
+        // Pest removal animation
         const pestRemovalTime = animations.recentPestRemovals.get(keyDef.keyCode);
         const pestRemovalAge = pestRemovalTime ? now - pestRemovalTime : Infinity;
+        const isPestRemoving = pestRemovalAge < HARVEST_DURATION;
+        if (isPestRemoving) hasActiveAnimations = true;
         if (pestRemovalTime && pestRemovalAge > HARVEST_DURATION) {
           animations.recentPestRemovals.delete(keyDef.keyCode);
         }
@@ -189,7 +191,7 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: F
         } else if (stage === 'fallow') {
           emoji = '\uD83D\uDCA4';
         } else if (stage === 'overworked') {
-          emoji = '\uD83D\uDD25';
+          emoji = '\uD83D\uDD12';
         } else {
           emoji = STAGE_EMOJI[stage] || '';
         }
@@ -267,46 +269,43 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: F
 
         // Key label on top face with isometric surface transform
         if (keyDef.label) {
-          ctx.save();
-          ctx.translate(topCenter.x, topCenter.y + 6);
-          // Isometric basis vectors (normalized) for the top face
           const nx = TILE_W / 2;
           const ny = TILE_H / 2;
           const len = Math.sqrt(nx * nx + ny * ny);
-          ctx.transform(
-            nx / len, ny / len,     // x-axis: NW->NE direction on surface
-            -nx / len, ny / len,    // y-axis: NW->SW direction on surface
-            0, 0,
-          );
+
+          // Base label (dark)
+          ctx.save();
+          ctx.translate(topCenter.x, topCenter.y + 6);
+          ctx.transform(nx / len, ny / len, -nx / len, ny / len, 0, 0);
           ctx.font = 'bold 11px sans-serif';
           ctx.fillStyle = darkenColor(color, 0.65);
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           ctx.fillText(keyDef.label, 0, 0);
           ctx.restore();
-        }
 
-        // Progress bar along bottom edge of front face
-        if (cell && stage !== 'fruit' && stage !== 'empty' && stage !== 'fallow' && stage !== 'overworked') {
-          const threshold = { watering: 15, sprout: 30, tree: 50 }[stage] || 1;
-          const progress = cell.hitCount / threshold;
-          const bl = block.front[3]; // baseSW
-          const br = block.front[2]; // baseSE
-          // Inset 10% from each end, 3px above bottom edge
-          const startX = bl.x + (br.x - bl.x) * 0.1;
-          const startY = bl.y + (br.y - bl.y) * 0.1 - 3;
-          const fullEndX = bl.x + (br.x - bl.x) * 0.9;
-          const fullEndY = bl.y + (br.y - bl.y) * 0.9 - 3;
-
-          ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(startX, startY);
-          ctx.lineTo(
-            startX + (fullEndX - startX) * progress,
-            startY + (fullEndY - startY) * progress,
-          );
-          ctx.stroke();
+          // Progress overlay on label text (fills from bottom to top)
+          if (cell && stage !== 'fruit' && stage !== 'empty' && stage !== 'fallow' && stage !== 'overworked') {
+            const threshold = { watering: 15, sprout: 30, tree: 50 }[stage] || 1;
+            const progress = cell.hitCount / threshold;
+            if (progress > 0) {
+              ctx.save();
+              ctx.translate(topCenter.x, topCenter.y + 6);
+              ctx.transform(nx / len, ny / len, -nx / len, ny / len, 0, 0);
+              // Clip: reveal from bottom up based on progress
+              const textH = 14;
+              const clipTop = textH / 2 - textH * progress;
+              ctx.beginPath();
+              ctx.rect(-30, clipTop, 60, textH * progress);
+              ctx.clip();
+              ctx.font = 'bold 11px sans-serif';
+              ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(keyDef.label, 0, 0);
+              ctx.restore();
+            }
+          }
         }
 
         ctx.restore();
@@ -393,6 +392,54 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: F
                          + 20 * bp * bp;
               const size = 3 * (1 - bp * 0.6);
               ctx.fillStyle = '#FFD700';
+              ctx.beginPath();
+              ctx.arc(px, py, size, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+          }
+
+          ctx.restore();
+        }
+
+        // Pest removal animation (bug flies away + green puff)
+        if (isPestRemoving && pestRemovalTime) {
+          const progress = pestRemovalAge / HARVEST_DURATION;
+          const center = polygonCentroid(block.top);
+
+          ctx.save();
+
+          // Phase 1: Green flash on block (0-20%)
+          if (progress < 0.2) {
+            const flashAlpha = 0.4 * (1 - progress / 0.2);
+            const flashColor = `rgba(100, 220, 100, ${flashAlpha})`;
+            fillPoly(ctx, block.top, flashColor, false);
+          }
+
+          // Phase 2: Bug flies away upward and shrinks (0-50%)
+          if (progress < 0.5) {
+            const ep = progress / 0.5;
+            const bugY = center.y - 2 - ep * 40;
+            const bugX = center.x + Math.sin(ep * Math.PI * 3) * 8;
+            ctx.globalAlpha = 1 - ep;
+            ctx.font = `${Math.round(18 * (1 - ep * 0.5))}px serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('\uD83D\uDC1B', bugX, bugY);
+            ctx.globalAlpha = 1;
+          }
+
+          // Phase 3: Green particle puff (10-70%)
+          if (progress > 0.1 && progress < 0.7) {
+            const bp = (progress - 0.1) / 0.6;
+            ctx.globalAlpha = (1 - bp) * 0.7;
+            for (let i = 0; i < 6; i++) {
+              const angle = (Math.PI * 2 * i) / 6 + ((pestRemovalTime % 628) / 100);
+              const speed = 18 + ((pestRemovalTime * (i + 5)) % 10);
+              const px = center.x + Math.cos(angle) * speed * bp;
+              const py = center.y + Math.sin(angle) * speed * bp * 0.6;
+              const size = 2 * (1 - bp * 0.8);
+              ctx.fillStyle = '#4ADE80';
               ctx.beginPath();
               ctx.arc(px, py, size, 0, Math.PI * 2);
               ctx.fill();
