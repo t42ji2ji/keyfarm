@@ -1,49 +1,152 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { GameState, STAGE_THRESHOLDS, NEXT_STAGE, FRUIT_TYPES } from '../types/game';
+import { LazyStore } from '@tauri-apps/plugin-store';
+import type { GameState, FarmStage, FarmCell } from '../types/game';
+import {
+  STAGE_THRESHOLDS,
+  NEXT_STAGE,
+  FALLOW_HARVEST_LIMIT,
+  FALLOW_WINDOW_MS,
+  FALLOW_DURATION_MS,
+  OVERWORK_PRESS_LIMIT,
+  OVERWORK_WINDOW_MS,
+  OVERWORK_DURATION_MS,
+  PEST_INTERVAL_MIN_MS,
+  PEST_INTERVAL_MAX_MS,
+  PEST_PENALTY_MS,
+  GOLDEN_CHANCE,
+} from '../types/game';
+import { getRandomCrop } from '../data/crops';
 import { createInitialCells } from '../data/hhkbLayout';
 
-const SAVE_KEY = 'keyfarm-save';
+const STORE_KEY = 'gameState';
+const store = new LazyStore('store.json');
 
-function getRandomFruit() {
-  return FRUIT_TYPES[Math.floor(Math.random() * FRUIT_TYPES.length)];
+function getPreviousStage(stage: FarmStage): FarmStage {
+  const order: FarmStage[] = ['empty', 'watering', 'sprout', 'tree', 'fruit'];
+  const idx = order.indexOf(stage);
+  return idx > 0 ? order[idx - 1] : 'empty';
 }
 
-function loadState(): GameState {
-  try {
-    const saved = localStorage.getItem(SAVE_KEY);
-    if (saved) return JSON.parse(saved);
-  } catch { /* ignore parse errors */ }
-  return { cells: createInitialCells(), totalHarvested: 0 };
+function defaultState(): GameState {
+  return {
+    cells: createInitialCells(),
+    totalHarvested: 0,
+    harvestsByCrop: {},
+    goldenHarvests: {},
+    totalKeyPresses: {},
+  };
 }
 
-function saveState(state: GameState) {
-  localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+function parseState(raw: unknown): GameState {
+  if (raw && typeof raw === 'object') {
+    const parsed = raw as Record<string, unknown>;
+
+    let cells = (parsed.cells as Record<string, FarmCell>) ?? createInitialCells();
+
+    // Migrate old fruitType -> cropId
+    for (const [key, cell] of Object.entries(cells)) {
+      const anyCell = cell as any;
+      if ('fruitType' in anyCell && !('cropId' in anyCell)) {
+        cells[key] = {
+          ...anyCell,
+          cropId: anyCell.fruitType,
+          isGolden: false,
+          fallowUntil: null,
+          harvestTimestamps: [],
+          overworkedUntil: null,
+          hasPest: false,
+          pestSince: null,
+          preOverworkedStage: null,
+          preOverworkedHitCount: 0,
+        };
+        delete (cells[key] as any).fruitType;
+      }
+      // Also ensure new fields exist on cells that already have cropId
+      if (!('isGolden' in anyCell)) {
+        cells[key] = {
+          ...cells[key],
+          isGolden: false,
+          fallowUntil: cells[key].fallowUntil ?? null,
+          harvestTimestamps: cells[key].harvestTimestamps ?? [],
+          overworkedUntil: cells[key].overworkedUntil ?? null,
+          hasPest: cells[key].hasPest ?? false,
+          pestSince: cells[key].pestSince ?? null,
+          preOverworkedStage: cells[key].preOverworkedStage ?? null,
+          preOverworkedHitCount: cells[key].preOverworkedHitCount ?? 0,
+        };
+      }
+    }
+
+    // Migrate harvestsByFruit -> harvestsByCrop
+    const harvestsByCrop = (parsed.harvestsByCrop as Record<string, number>)
+      ?? (parsed.harvestsByFruit as Record<string, number>)
+      ?? {};
+    const goldenHarvests = (parsed.goldenHarvests as Record<string, number>) ?? {};
+
+    return {
+      cells,
+      totalHarvested: (parsed.totalHarvested as number) ?? 0,
+      harvestsByCrop,
+      goldenHarvests,
+      totalKeyPresses: (parsed.totalKeyPresses as Record<string, number>) ?? {},
+    };
+  }
+  return defaultState();
+}
+
+async function saveState(state: GameState) {
+  await store.set(STORE_KEY, state);
+  await store.save();
 }
 
 export interface AnimationState {
-  recentHits: Map<string, number>;    // keyCode -> timestamp
-  recentHarvests: Map<string, number>; // keyCode -> timestamp
+  recentHits: Map<string, number>;        // keyCode -> timestamp
+  recentHarvests: Map<string, number>;     // keyCode -> timestamp
+  harvestFruits: Map<string, string>;      // keyCode -> cropId
+  harvestGolden: Map<string, boolean>;     // keyCode -> was golden?
+  recentPestRemovals: Map<string, number>; // keyCode -> timestamp
 }
 
 export function useGameState() {
-  const [gameState, setGameState] = useState<GameState>(loadState);
+  const [gameState, setGameState] = useState<GameState>(defaultState);
   const stateRef = useRef(gameState);
   stateRef.current = gameState;
+  const loadedRef = useRef(false);
+  const pressTracker = useRef<Map<string, number[]>>(new Map());
   const animRef = useRef<AnimationState>({
     recentHits: new Map(),
     recentHarvests: new Map(),
+    harvestFruits: new Map(),
+    harvestGolden: new Map(),
+    recentPestRemovals: new Map(),
   });
+
+  // Load saved state from store on mount
+  useEffect(() => {
+    store.get<GameState>(STORE_KEY).then((raw) => {
+      if (raw) {
+        const loaded = parseState(raw);
+        setGameState(loaded);
+        stateRef.current = loaded;
+      }
+      loadedRef.current = true;
+    });
+  }, []);
 
   // Auto-save every 10 seconds
   useEffect(() => {
-    const interval = setInterval(() => saveState(stateRef.current), 10000);
+    const interval = setInterval(() => {
+      if (loadedRef.current) saveState(stateRef.current);
+    }, 10000);
     return () => clearInterval(interval);
   }, []);
 
   // Save on unmount
   useEffect(() => {
-    return () => saveState(stateRef.current);
+    return () => {
+      if (loadedRef.current) saveState(stateRef.current);
+    };
   }, []);
 
   // Listen for key press events from Rust backend
@@ -53,13 +156,67 @@ export function useGameState() {
       animRef.current.recentHits.set(keyCode, Date.now());
       setGameState((prev) => {
         const cell = prev.cells[keyCode];
-        if (!cell || cell.stage === 'fruit') return prev;
 
+        // Track total key presses regardless of cell state
+        const newTotalKeyPresses = {
+          ...prev.totalKeyPresses,
+          [keyCode]: (prev.totalKeyPresses[keyCode] ?? 0) + 1,
+        };
+
+        if (!cell) {
+          return { ...prev, totalKeyPresses: newTotalKeyPresses };
+        }
+
+        // --- Overworked detection ---
+        const now = Date.now();
+        const pressTimestamps = pressTracker.current.get(keyCode) || [];
+        const recent = [...pressTimestamps, now].filter(t => now - t < OVERWORK_WINDOW_MS);
+        pressTracker.current.set(keyCode, recent);
+
+        if (
+          recent.length >= OVERWORK_PRESS_LIMIT &&
+          cell.stage !== 'overworked' &&
+          cell.stage !== 'fallow'
+        ) {
+          pressTracker.current.set(keyCode, []);
+          return {
+            ...prev,
+            totalKeyPresses: newTotalKeyPresses,
+            cells: {
+              ...prev.cells,
+              [keyCode]: {
+                ...cell,
+                stage: 'overworked' as FarmStage,
+                overworkedUntil: now + OVERWORK_DURATION_MS,
+                preOverworkedStage: cell.stage,
+                preOverworkedHitCount: cell.hitCount,
+              },
+            },
+          };
+        }
+
+        // Skip growth for overworked or fallow cells
+        if (cell.stage === 'overworked' || cell.stage === 'fallow') {
+          return { ...prev, totalKeyPresses: newTotalKeyPresses };
+        }
+
+        // Skip growth for pest-infested cells
+        if (cell.hasPest) {
+          return { ...prev, totalKeyPresses: newTotalKeyPresses };
+        }
+
+        // Skip growth for fruit cells (fully grown)
+        if (cell.stage === 'fruit') {
+          return { ...prev, totalKeyPresses: newTotalKeyPresses };
+        }
+
+        // --- Normal growth ---
         const newHitCount = cell.hitCount + 1;
         const threshold = STAGE_THRESHOLDS[cell.stage];
-        let newStage = cell.stage;
+        let newStage: FarmStage = cell.stage;
         let newCount = newHitCount;
-        let newFruit = cell.fruitType;
+        let newCropId = cell.cropId;
+        let newIsGolden = cell.isGolden;
 
         if (newHitCount >= threshold) {
           const next = NEXT_STAGE[cell.stage];
@@ -67,25 +224,29 @@ export function useGameState() {
             newStage = next;
             newCount = 0;
             if (next === 'fruit') {
-              newFruit = getRandomFruit();
+              // Roll for golden at fruit stage
+              newIsGolden = Math.random() < GOLDEN_CHANCE;
             }
           }
         }
 
-        // Assign random fruit on first watering
-        if (cell.stage === 'empty' && newStage === 'watering' && !newFruit) {
-          newFruit = getRandomFruit();
+        // Assign random crop on first transition to watering
+        if (cell.stage === 'empty' && newStage === 'watering') {
+          const crop = getRandomCrop();
+          newCropId = crop.id;
         }
 
         return {
           ...prev,
+          totalKeyPresses: newTotalKeyPresses,
           cells: {
             ...prev.cells,
             [keyCode]: {
               ...cell,
               stage: newStage,
               hitCount: newCount,
-              fruitType: newFruit,
+              cropId: newCropId,
+              isGolden: newIsGolden,
             },
           },
         };
@@ -95,26 +256,182 @@ export function useGameState() {
     return () => { unlisten.then(fn => fn()); };
   }, []);
 
+  // --- Timer effect for state expiry (1 second interval) ---
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setGameState((prev) => {
+        let changed = false;
+        const newCells = { ...prev.cells };
+
+        for (const [key, cell] of Object.entries(newCells)) {
+          // Overworked expiry
+          if (
+            cell.stage === 'overworked' &&
+            cell.overworkedUntil &&
+            now >= cell.overworkedUntil
+          ) {
+            newCells[key] = {
+              ...cell,
+              stage: cell.preOverworkedStage ?? 'empty',
+              hitCount: cell.preOverworkedHitCount,
+              overworkedUntil: null,
+              preOverworkedStage: null,
+              preOverworkedHitCount: 0,
+            };
+            changed = true;
+            continue;
+          }
+
+          // Fallow expiry
+          if (
+            cell.stage === 'fallow' &&
+            cell.fallowUntil &&
+            now >= cell.fallowUntil
+          ) {
+            newCells[key] = {
+              ...cell,
+              stage: 'empty',
+              hitCount: 0,
+              fallowUntil: null,
+              harvestTimestamps: [],
+              cropId: null,
+              isGolden: false,
+            };
+            changed = true;
+            continue;
+          }
+
+          // Pest penalty
+          if (
+            cell.hasPest &&
+            cell.pestSince &&
+            now - cell.pestSince >= PEST_PENALTY_MS
+          ) {
+            const regressedStage = getPreviousStage(cell.stage);
+            const clearCrop = cell.stage === 'fruit';
+            newCells[key] = {
+              ...cell,
+              stage: regressedStage,
+              hitCount: 0,
+              hasPest: false,
+              pestSince: null,
+              cropId: clearCrop ? null : cell.cropId,
+              isGolden: clearCrop ? false : cell.isGolden,
+            };
+            changed = true;
+          }
+        }
+
+        if (!changed) return prev;
+        return { ...prev, cells: newCells };
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // --- Pest spawning timer ---
+  useEffect(() => {
+    let timeout: number;
+    const schedulePest = () => {
+      const delay = PEST_INTERVAL_MIN_MS + Math.random() * (PEST_INTERVAL_MAX_MS - PEST_INTERVAL_MIN_MS);
+      timeout = window.setTimeout(() => {
+        setGameState((prev) => {
+          const candidates = Object.values(prev.cells).filter(
+            c => ['watering', 'sprout', 'tree'].includes(c.stage) && !c.hasPest
+          );
+          if (candidates.length === 0) {
+            schedulePest();
+            return prev;
+          }
+          const target = candidates[Math.floor(Math.random() * candidates.length)];
+          schedulePest();
+          return {
+            ...prev,
+            cells: {
+              ...prev.cells,
+              [target.keyCode]: { ...target, hasPest: true, pestSince: Date.now() },
+            },
+          };
+        });
+      }, delay);
+    };
+    schedulePest();
+    return () => clearTimeout(timeout);
+  }, []);
+
   const harvest = useCallback((keyCode: string) => {
+    // Capture crop info before state resets it
+    const cell = stateRef.current.cells[keyCode];
+    if (cell?.cropId) {
+      animRef.current.harvestFruits.set(keyCode, cell.cropId);
+      animRef.current.harvestGolden.set(keyCode, cell.isGolden);
+    }
     animRef.current.recentHarvests.set(keyCode, Date.now());
     setGameState((prev) => {
-      const cell = prev.cells[keyCode];
-      if (!cell || cell.stage !== 'fruit') return prev;
+      const c = prev.cells[keyCode];
+      if (!c || c.stage !== 'fruit' || !c.cropId) return prev;
+
+      const now = Date.now();
+      const timestamps = [...(c.harvestTimestamps || []), now]
+        .filter(t => now - t < FALLOW_WINDOW_MS);
+
+      let newStage: FarmStage = 'empty';
+      let fallowUntil: number | null = null;
+
+      if (timestamps.length >= FALLOW_HARVEST_LIMIT) {
+        newStage = 'fallow';
+        fallowUntil = now + FALLOW_DURATION_MS;
+      }
+
+      const newHarvestsByCrop = {
+        ...prev.harvestsByCrop,
+        [c.cropId]: (prev.harvestsByCrop[c.cropId] ?? 0) + 1,
+      };
+
+      const newGoldenHarvests = c.isGolden
+        ? {
+            ...prev.goldenHarvests,
+            [c.cropId]: (prev.goldenHarvests[c.cropId] ?? 0) + 1,
+          }
+        : prev.goldenHarvests;
+
       return {
         ...prev,
         totalHarvested: prev.totalHarvested + 1,
+        harvestsByCrop: newHarvestsByCrop,
+        goldenHarvests: newGoldenHarvests,
         cells: {
           ...prev.cells,
           [keyCode]: {
-            ...cell,
-            stage: 'empty',
+            ...c,
+            stage: newStage,
             hitCount: 0,
-            fruitType: null,
+            cropId: null,
+            isGolden: false,
+            fallowUntil,
+            harvestTimestamps: timestamps,
           },
         },
       };
     });
   }, []);
 
-  return { gameState, harvest, animations: animRef.current };
+  const removePest = useCallback((keyCode: string) => {
+    animRef.current.recentPestRemovals.set(keyCode, Date.now());
+    setGameState((prev) => {
+      const c = prev.cells[keyCode];
+      if (!c || !c.hasPest) return prev;
+      return {
+        ...prev,
+        cells: {
+          ...prev.cells,
+          [keyCode]: { ...c, hasPest: false, pestSince: null },
+        },
+      };
+    });
+  }, []);
+
+  return { gameState, harvest, removePest, animations: animRef.current };
 }
