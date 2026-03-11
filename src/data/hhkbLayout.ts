@@ -1,4 +1,4 @@
-import { FarmCell } from '../types/game';
+import type { FarmCell } from '../types/game';
 
 // HHKB layout: 4 rows (skipping bottom row for POC)
 // Row 0: Esc 1 2 3 4 5 6 7 8 9 0 - = \ `  (15 keys)
@@ -79,7 +79,18 @@ const ROW_3: KeyDef[] = [
   { keyCode: 'Function', label: 'Fn', width: 1 },
 ];
 
-export const HHKB_ROWS: KeyDef[][] = [ROW_0, ROW_1, ROW_2, ROW_3];
+// HHKB bottom row: spacers + Alt Cmd Space Cmd Alt
+const ROW_4: KeyDef[] = [
+  { keyCode: '_gap_l', label: '', width: 2 },
+  { keyCode: 'AltLeft', label: 'Alt', width: 1 },
+  { keyCode: 'MetaLeft', label: 'Cmd', width: 1.5 },
+  { keyCode: 'Space', label: 'Space', width: 6 },
+  { keyCode: 'MetaRight', label: 'Cmd', width: 1.5 },
+  { keyCode: 'AltRight', label: 'Alt', width: 1 },
+  { keyCode: '_gap_r', label: '', width: 2 },
+];
+
+export const HHKB_ROWS: KeyDef[][] = [ROW_0, ROW_1, ROW_2, ROW_3, ROW_4];
 
 export function createInitialCells(): Record<string, FarmCell> {
   const cells: Record<string, FarmCell> = {};
@@ -92,10 +103,18 @@ export function createInitialCells(): Record<string, FarmCell> {
         label: key.label,
         stage: 'empty',
         hitCount: 0,
-        fruitType: null,
+        cropId: null,
+        isGolden: false,
         row: rowIdx,
         col: colOffset,
         width: key.width,
+        fallowUntil: null,
+        harvestTimestamps: [],
+        overworkedUntil: null,
+        hasPest: false,
+        pestSince: null,
+        preOverworkedStage: null,
+        preOverworkedHitCount: 0,
       };
       colOffset += key.width;
     });

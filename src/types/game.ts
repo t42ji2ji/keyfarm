@@ -1,37 +1,73 @@
-export type FarmStage = 'empty' | 'watering' | 'sprout' | 'tree' | 'fruit';
+export type FarmStage = 'empty' | 'watering' | 'sprout' | 'tree' | 'fruit' | 'fallow' | 'overworked';
 
-export type FruitType = 'apple' | 'orange' | 'cherry' | 'grape' | 'peach' | 'lemon';
+export type Rarity = 'common' | 'uncommon' | 'rare' | 'legendary';
+export type CropCategory = 'fruit' | 'animal';
+
+export interface CropDef {
+  id: string;
+  emoji: string;
+  category: CropCategory;
+  rarity: Rarity;
+  weight: number;
+}
 
 export interface FarmCell {
-  keyCode: string;        // rdev key name, e.g. "KeyA"
-  label: string;          // display label, e.g. "A"
+  keyCode: string;
+  label: string;
   stage: FarmStage;
-  hitCount: number;        // current hits in this stage
-  fruitType: FruitType | null;
+  hitCount: number;
+  cropId: string | null;
+  isGolden: boolean;
   row: number;
   col: number;
-  width: number;           // relative width (1 = standard key)
+  width: number;
+  fallowUntil: number | null;
+  harvestTimestamps: number[];
+  overworkedUntil: number | null;
+  hasPest: boolean;
+  pestSince: number | null;
+  preOverworkedStage: FarmStage | null;
+  preOverworkedHitCount: number;
 }
 
 export interface GameState {
-  cells: Record<string, FarmCell>;  // keyed by keyCode
+  cells: Record<string, FarmCell>;
   totalHarvested: number;
+  harvestsByCrop: Record<string, number>;
+  goldenHarvests: Record<string, number>;
+  totalKeyPresses: Record<string, number>;
 }
 
-export const STAGE_THRESHOLDS: Record<FarmStage, number> = {
-  empty: 5,      // 5 hits → watering
-  watering: 15,  // 15 hits → sprout
-  sprout: 30,    // 30 hits → tree
-  tree: 50,      // 50 hits → fruit
-  fruit: 0,      // harvest by mouse
+export const STAGE_THRESHOLDS: Record<string, number> = {
+  empty: 5,
+  watering: 15,
+  sprout: 30,
+  tree: 50,
+  fruit: 0,
+  fallow: 0,
+  overworked: 0,
 };
 
-export const NEXT_STAGE: Record<FarmStage, FarmStage | null> = {
+export const NEXT_STAGE: Record<string, FarmStage | null> = {
   empty: 'watering',
   watering: 'sprout',
   sprout: 'tree',
   tree: 'fruit',
-  fruit: null,  // reset to empty on harvest
+  fruit: null,
+  fallow: null,
+  overworked: null,
 };
 
-export const FRUIT_TYPES: FruitType[] = ['apple', 'orange', 'cherry', 'grape', 'peach', 'lemon'];
+export const FALLOW_HARVEST_LIMIT = 3;
+export const FALLOW_WINDOW_MS = 10 * 60_000;
+export const FALLOW_DURATION_MS = 3 * 60_000;
+
+export const OVERWORK_PRESS_LIMIT = 30;
+export const OVERWORK_WINDOW_MS = 5_000;
+export const OVERWORK_DURATION_MS = 20_000;
+
+export const PEST_INTERVAL_MIN_MS = 30_000;
+export const PEST_INTERVAL_MAX_MS = 60_000;
+export const PEST_PENALTY_MS = 30_000;
+
+export const GOLDEN_CHANCE = 0.01;
