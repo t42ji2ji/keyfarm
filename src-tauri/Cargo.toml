@@ -1,8 +1,8 @@
 [package]
-name = "app"
+name = "keyfarm"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "KeyFarm - Grow your typing skills"
+authors = ["dorara"]
 license = ""
 repository = ""
 edition = "2021"
@@ -26,3 +26,4 @@ tauri-plugin-log = "2"
 core-graphics = "0.25"
 core-foundation = "0.10"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-store = "2.4.2"

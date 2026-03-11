@@ -2,10 +2,27 @@
   background: transparent;
   width: 100vw;
   height: 100vh;
+  position: relative;
+  overflow: hidden;
 }
 
-.drag-region {
-  -webkit-app-region: drag;
-  height: 24px;
-  cursor: move;
+.canvas-scaler {
+  transform-origin: center center;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+}
+
+.resize-grip {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
 }

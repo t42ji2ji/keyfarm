@@ -18,7 +18,7 @@ const TILE_W = 64;
 const TILE_H = 32;
 const PADDING = 40;
 const HIT_FLASH_DURATION = 200;
-const HARVEST_DURATION = 700;
+const HARVEST_DURATION = 1200;
 
 const STAGE_DEPTH: Record<FarmStage, number> = {
   empty: 8,
@@ -39,7 +39,7 @@ const STAGE_COLORS: Record<FarmStage, string> = {
   tree: '#2D8B46',
   fruit: '#FF6B6B',
   fallow: '#8B8B8B',
-  overworked: '#FF4500',
+  overworked: '#D4845A',
 };
 
 const LEFT_FACE_FACTOR = 0.55;
@@ -47,7 +47,7 @@ const FRONT_FACE_FACTOR = 0.75;
 
 const STAGE_EMOJI: Record<FarmStage, string> = {
   empty: '',
-  watering: '\uD83D\uDCA7',
+  watering: '',
   sprout: '\uD83C\uDF31',
   tree: '\uD83C\uDF33',
   fruit: '',
@@ -67,23 +67,46 @@ const _bounds = computeCanvasBounds(TILE_W, TILE_H, MAX_DEPTH, PADDING);
 export const CANVAS_WIDTH = _bounds.width;
 export const CANVAS_HEIGHT = _bounds.height;
 
-/** Map mouse event to canvas-pixel coordinates (accounts for CSS transform). */
-function canvasCoords(e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement) {
+/** Map mouse event to logical canvas coordinates (accounts for CSS transform + dpr). */
+function canvasCoords(e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvasElement, logicalW: number, logicalH: number) {
   const rect = canvas.getBoundingClientRect();
   return {
-    x: (e.clientX - rect.left) * (canvas.width / rect.width),
-    y: (e.clientY - rect.top) * (canvas.height / rect.height),
+    x: (e.clientX - rect.left) * (logicalW / rect.width),
+    y: (e.clientY - rect.top) * (logicalH / rect.height),
   };
 }
+
+/** Map a 0–1 ratio to a cold→hot color (grey → blue → green → yellow → orange → red). */
+function heatColor(ratio: number): string {
+  if (ratio <= 0) return '#3a3a3a';
+  const stops: [number, number, number][] = [
+    [58, 130, 220],  // blue  (low)
+    [60, 190, 90],   // green
+    [240, 220, 50],  // yellow
+    [240, 150, 30],  // orange
+    [230, 50, 40],   // red   (high)
+  ];
+  const t = Math.min(ratio, 1) * (stops.length - 1);
+  const i = Math.min(Math.floor(t), stops.length - 2);
+  const f = t - i;
+  const r = Math.round(stops[i][0] + (stops[i + 1][0] - stops[i][0]) * f);
+  const g = Math.round(stops[i][1] + (stops[i + 1][1] - stops[i][1]) * f);
+  const b = Math.round(stops[i][2] + (stops[i + 1][2] - stops[i][2]) * f);
+  return `rgb(${r},${g},${b})`;
+}
+
+const HEATMAP_DEPTH_MIN = 6;
+const HEATMAP_DEPTH_MAX = 28;
 
 interface FarmCanvasProps {
   gameState: GameState;
   animations: AnimationState;
   onHarvest: (keyCode: string) => void;
   onRemovePest: (keyCode: string) => void;
+  viewMode: 'farm' | 'heatmap';
 }
 
-export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: FarmCanvasProps) {
+export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, viewMode }: FarmCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cellBlocksRef = useRef<Map<string, IsoBlock>>(new Map());
   const rafRef = useRef<number>(0);
@@ -98,12 +121,61 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: F
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const dpr = window.devicePixelRatio || 1;
     const now = Date.now();
     let hasActiveAnimations = false;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     cellBlocksRef.current.clear();
 
+    if (viewMode === 'heatmap') {
+      // Compute max presses across all keys
+      const pressValues = Object.values(gameStateRef.current.totalKeyPresses);
+      const maxPresses = pressValues.length > 0 ? Math.max(...pressValues, 1) : 1;
+
+      HHKB_ROWS.forEach((row, rowIdx) => {
+        let colOffset = 0;
+        row.forEach((keyDef) => {
+          const count = gameStateRef.current.totalKeyPresses[keyDef.keyCode] || 0;
+          const ratio = count / maxPresses;
+          const color = heatColor(ratio);
+          const depth = HEATMAP_DEPTH_MIN + ratio * (HEATMAP_DEPTH_MAX - HEATMAP_DEPTH_MIN);
+
+          const block = computeBlockVertices(
+            colOffset, rowIdx, keyDef.width, depth,
+            TILE_W, TILE_H, originX, originY,
+          );
+          cellBlocksRef.current.set(keyDef.keyCode, block);
+
+          // Draw 3 faces
+          fillPoly(ctx, block.right, darkenColor(color, LEFT_FACE_FACTOR));
+          fillPoly(ctx, block.front, darkenColor(color, FRONT_FACE_FACTOR));
+          fillPoly(ctx, block.top, color);
+
+          // Draw count number on top face with isometric transform
+          const topCenter = polygonCentroid(block.top);
+          const nx = TILE_W / 2;
+          const ny = TILE_H / 2;
+          const len = Math.sqrt(nx * nx + ny * ny);
+
+          ctx.save();
+          ctx.translate(topCenter.x, topCenter.y);
+          ctx.transform(nx / len, ny / len, -nx / len, ny / len, 0, 0);
+          ctx.font = 'bold 11px sans-serif';
+          ctx.fillStyle = ratio > 0.5 ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.8)';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(count > 0 ? String(count) : '', 0, 0);
+          ctx.restore();
+
+          colOffset += keyDef.width;
+        });
+      });
+      return;
+    }
+
+    // --- Farm view ---
     HHKB_ROWS.forEach((row, rowIdx) => {
       let colOffset = 0;
 
@@ -299,7 +371,7 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: F
               ctx.rect(-30, clipTop, 60, textH * progress);
               ctx.clip();
               ctx.font = 'bold 11px sans-serif';
-              ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+              ctx.fillStyle = darkenColor(color, 1.3);
               ctx.textAlign = 'center';
               ctx.textBaseline = 'middle';
               ctx.fillText(keyDef.label, 0, 0);
@@ -330,12 +402,13 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: F
             fillPoly(ctx, block.front, flashColor, false);
           }
 
-          // Phase 2: Emoji floats up, grows, and fades (0-60%)
-          if (progress < 0.6) {
-            const ep = progress / 0.6;
-            const emojiY = center.y - 2 - ep * 35;
-            const emojiScale = 1 + ep * 0.4;
-            ctx.globalAlpha = 1 - ep;
+          // Phase 2: Emoji floats up, grows, then fades (0-75%)
+          if (progress < 0.75) {
+            const ep = progress / 0.75;
+            const emojiY = center.y - 2 - ep * 45;
+            const emojiScale = 1 + ep * 0.5;
+            // Stay opaque for first 60%, then fade out
+            ctx.globalAlpha = ep < 0.6 ? 1 : 1 - ((ep - 0.6) / 0.4);
             ctx.font = `${Math.round(20 * emojiScale)}px serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -457,7 +530,7 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: F
     if (hasActiveAnimations) {
       rafRef.current = requestAnimationFrame(draw);
     }
-  }, [animations, originX, originY]);
+  }, [animations, originX, originY, viewMode]);
 
   useEffect(() => {
     cancelAnimationFrame(rafRef.current);
@@ -466,11 +539,14 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: F
   }, [gameState, draw]);
 
   const harvestedRef = useRef<Set<string>>(new Set());
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const { x, y } = canvasCoords(e, canvas);
+    if (viewModeRef.current === 'heatmap') { canvas.style.cursor = 'default'; return; }
+    const { x, y } = canvasCoords(e, canvas, canvasWidth, canvasHeight);
 
     let overFruit = false;
     for (const [keyCode, block] of cellBlocksRef.current.entries()) {
@@ -513,14 +589,16 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest }: F
     getCurrentWindow().startDragging();
   }, []);
 
+  const dpr = window.devicePixelRatio || 1;
+
   return (
     <canvas
       ref={canvasRef}
-      width={canvasWidth}
-      height={canvasHeight}
+      width={canvasWidth * dpr}
+      height={canvasHeight * dpr}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
-      style={{ display: 'block' }}
+      style={{ display: 'block', width: canvasWidth, height: canvasHeight }}
     />
   );
 }

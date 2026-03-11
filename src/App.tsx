@@ -10,6 +10,7 @@ function App() {
   const { gameState, harvest, removePest, animations } = useGameState();
   const [scale, setScale] = useState(1);
   const [showStats, setShowStats] = useState(false);
+  const [viewMode, setViewMode] = useState<'farm' | 'heatmap'>('farm');
 
   useEffect(() => {
     const updateScale = () => {
@@ -31,6 +32,13 @@ function App() {
     return () => { unlisten.then((f) => f()); };
   }, []);
 
+  useEffect(() => {
+    const unlisten = listen('toggle-heatmap', () => {
+      setViewMode((v) => v === 'farm' ? 'heatmap' : 'farm');
+    });
+    return () => { unlisten.then((f) => f()); };
+  }, []);
+
   const handleResizeGrip = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -43,7 +51,7 @@ function App() {
         className="canvas-scaler"
         style={{ transform: `scale(${scale})` }}
       >
-        <FarmCanvas gameState={gameState} animations={animations} onHarvest={harvest} onRemovePest={removePest} />
+        <FarmCanvas gameState={gameState} animations={animations} onHarvest={harvest} onRemovePest={removePest} viewMode={viewMode} />
       </div>
       {showStats && (
         <StatsPanel gameState={gameState} onClose={() => setShowStats(false)} />

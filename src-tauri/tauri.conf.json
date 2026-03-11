@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "KeyFarm",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.dorara.keyfarm",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -10,12 +10,13 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
         "title": "KeyFarm",
-        "width": 900,
-        "height": 340,
+        "width": 740,
+        "height": 440,
         "transparent": true,
         "alwaysOnTop": true,
         "decorations": false,
@@ -28,7 +29,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["dmg"],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

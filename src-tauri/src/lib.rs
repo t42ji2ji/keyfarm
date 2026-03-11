@@ -2,12 +2,22 @@ use serde::Serialize;
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+
+struct TrayMenuItems {
+    show: MenuItem<tauri::Wry>,
+    pin: MenuItem<tauri::Wry>,
+    heatmap: MenuItem<tauri::Wry>,
+}
+
+struct HeatmapState(AtomicBool);
 
 #[derive(Clone, Serialize)]
 struct KeyPressEvent {
@@ -35,6 +45,8 @@ const CG_EVENT_MASK: u64 = (1 << K_CG_EVENT_KEY_DOWN) | (1 << K_CG_EVENT_FLAGS_C
 // Modifier flag masks
 const K_CG_EVENT_FLAG_MASK_SHIFT: u64 = 0x00020000;
 const K_CG_EVENT_FLAG_MASK_CONTROL: u64 = 0x00040000;
+const K_CG_EVENT_FLAG_MASK_ALTERNATE: u64 = 0x00080000;
+const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x00100000;
 const K_CG_EVENT_FLAG_MASK_FN: u64 = 0x00800000;
 
 extern "C" {
@@ -118,10 +130,15 @@ fn virtual_keycode_to_string(keycode: u16) -> Option<String> {
         50 => Some("BackQuote".into()),
         51 => Some("Delete".into()),
         53 => Some("Escape".into()),
+        49 => Some("Space".into()),
         // Modifier keys (handled via kCGEventFlagsChanged)
+        54 => Some("MetaRight".into()),
+        55 => Some("MetaLeft".into()),
         56 => Some("ShiftLeft".into()),
+        58 => Some("AltLeft".into()),
         59 => Some("ControlLeft".into()),
         60 => Some("ShiftRight".into()),
+        61 => Some("AltRight".into()),
         63 => Some("Function".into()),
         _ => None,
     }
@@ -131,31 +148,34 @@ fn virtual_keycode_to_string(keycode: u16) -> Option<String> {
 fn is_modifier_press(keycode: u16, flags: u64) -> bool {
     match keycode {
         56 | 60 => flags & K_CG_EVENT_FLAG_MASK_SHIFT != 0,
+        58 | 61 => flags & K_CG_EVENT_FLAG_MASK_ALTERNATE != 0,
+        55 | 54 => flags & K_CG_EVENT_FLAG_MASK_COMMAND != 0,
         59 => flags & K_CG_EVENT_FLAG_MASK_CONTROL != 0,
         63 => flags & K_CG_EVENT_FLAG_MASK_FN != 0,
         _ => false,
     }
 }
 
-thread_local! {
-    static APP_HANDLE: RefCell<Option<tauri::AppHandle>> = const { RefCell::new(None) };
-    static EVENT_TAP_REF: RefCell<CFMachPortRef> = const { RefCell::new(ptr::null()) };
+/// Shared state passed to the event tap callback via user_info pointer.
+struct TapContext {
+    tx: mpsc::Sender<String>,
+    tap: RefCell<CFMachPortRef>,
 }
 
 extern "C" fn event_tap_callback(
     _proxy: CGEventTapProxy,
     event_type: u32,
     event: CGEventRef,
-    _user_info: *mut c_void,
+    user_info: *mut c_void,
 ) -> CGEventRef {
+    let ctx = unsafe { &*(user_info as *const TapContext) };
+
     // Re-enable tap if it was disabled by timeout
     if event_type == 0xFFFFFFFE {
-        EVENT_TAP_REF.with(|tap| {
-            let tap = *tap.borrow();
-            if !tap.is_null() {
-                unsafe { CGEventTapEnable(tap, true) };
-            }
-        });
+        let tap = *ctx.tap.borrow();
+        if !tap.is_null() {
+            unsafe { CGEventTapEnable(tap, true) };
+        }
         return event;
     }
 
@@ -169,22 +189,34 @@ extern "C" fn event_tap_callback(
         }
     }
 
+    // Send key name through channel (near-zero overhead, no IPC in callback)
     if let Some(key_name) = virtual_keycode_to_string(keycode) {
-        APP_HANDLE.with(|h| {
-            if let Some(handle) = h.borrow().as_ref() {
-                let _ = handle.emit("key-press", KeyPressEvent { key_code: key_name });
-            }
-        });
+        let _ = ctx.tx.send(key_name);
     }
 
     event
 }
 
 fn start_keyboard_listener(app_handle: tauri::AppHandle) {
+    let (tx, rx) = mpsc::channel::<String>();
+
+    // Consumer thread: reads key names from channel and emits to frontend.
+    // This keeps the emit() cost off the event tap callback thread.
+    let handle = app_handle.clone();
     thread::spawn(move || {
-        APP_HANDLE.with(|h| {
-            *h.borrow_mut() = Some(app_handle);
-        });
+        for key_name in rx {
+            let _ = handle.emit("key-press", KeyPressEvent { key_code: key_name });
+        }
+    });
+
+    thread::spawn(move || {
+        // Leak the context so it lives for the lifetime of the process.
+        // The callback receives it via user_info pointer.
+        let ctx: &'static TapContext = Box::leak(Box::new(TapContext {
+            tx,
+            tap: RefCell::new(ptr::null()),
+        }));
+        let ctx_ptr = ctx as *const TapContext as *mut c_void;
 
         unsafe {
             let tap = CGEventTapCreate(
@@ -193,7 +225,7 @@ fn start_keyboard_listener(app_handle: tauri::AppHandle) {
                 K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
                 CG_EVENT_MASK,
                 event_tap_callback,
-                ptr::null_mut(),
+                ctx_ptr,
             );
 
             if tap.is_null() {
@@ -201,9 +233,7 @@ fn start_keyboard_listener(app_handle: tauri::AppHandle) {
                 return;
             }
 
-            EVENT_TAP_REF.with(|t| {
-                *t.borrow_mut() = tap;
-            });
+            *ctx.tap.borrow_mut() = tap;
 
             let source = CFMachPortCreateRunLoopSource(ptr::null(), tap, 0);
             let run_loop = CFRunLoopGetCurrent();
@@ -226,17 +256,64 @@ fn toggle_window(app: &tauri::AppHandle) {
     }
 }
 
+fn update_tray_menu_labels(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let visible = window.is_visible().unwrap_or(false);
+        let pinned = window.is_always_on_top().unwrap_or(false);
+        let items = app.state::<TrayMenuItems>();
+        let _ = items.show.set_text(if visible { "Hide Window" } else { "Show Window" });
+        let _ = items.pin.set_text(if pinned { "Unpin from Top" } else { "Pin to Top" });
+    }
+}
+
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let show = MenuItem::with_id(app, "show", "Show/Hide", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Hide Window", true, None::<&str>)?;
+    let pin = MenuItem::with_id(app, "pin", "Unpin from Top", true, None::<&str>)?;
+    let heatmap = MenuItem::with_id(app, "heatmap", "Heatmap", true, None::<&str>)?;
+    let stats = MenuItem::with_id(app, "stats", "Stats", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &pin, &heatmap, &stats, &quit])?;
+
+    app.manage(TrayMenuItems {
+        show: show.clone(),
+        pin: pin.clone(),
+        heatmap: heatmap.clone(),
+    });
+    app.manage(HeatmapState(AtomicBool::new(false)));
 
     TrayIconBuilder::new()
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(tauri::include_image!("icons/tray-icon.png"))
         .menu(&menu)
         .on_menu_event(|app, event| {
             match event.id.as_ref() {
-                "show" => toggle_window(app),
+                "show" => {
+                    toggle_window(app);
+                    update_tray_menu_labels(app);
+                }
+                "pin" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let is_on_top = window.is_always_on_top().unwrap_or(false);
+                        let _ = window.set_always_on_top(!is_on_top);
+                    }
+                    update_tray_menu_labels(app);
+                }
+                "heatmap" => {
+                    let state = app.state::<HeatmapState>();
+                    let was_on = state.0.fetch_xor(true, Ordering::Relaxed);
+                    let items = app.state::<TrayMenuItems>();
+                    let _ = items.heatmap.set_text(if was_on { "Heatmap" } else { "Heatmap \u{2705}" });
+                    let _ = app.emit("toggle-heatmap", ());
+                }
+                "stats" => {
+                    // Show window first if hidden, then toggle stats panel
+                    if let Some(window) = app.get_webview_window("main") {
+                        if !window.is_visible().unwrap_or(true) {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    let _ = app.emit("toggle-stats", ());
+                }
                 "quit" => app.exit(0),
                 _ => {}
             }
@@ -249,6 +326,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             } = event
             {
                 toggle_window(tray.app_handle());
+                update_tray_menu_labels(tray.app_handle());
             }
         })
         .build(app)?;
@@ -259,11 +337,13 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         toggle_window(app);
+                        update_tray_menu_labels(app);
                     }
                 })
                 .build(),
