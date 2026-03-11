@@ -309,15 +309,14 @@ export function useGameState() {
             now - cell.pestSince >= PEST_PENALTY_MS
           ) {
             const regressedStage = getPreviousStage(cell.stage);
-            const clearCrop = cell.stage === 'fruit';
             newCells[key] = {
               ...cell,
               stage: regressedStage,
               hitCount: 0,
               hasPest: false,
               pestSince: null,
-              cropId: clearCrop ? null : cell.cropId,
-              isGolden: clearCrop ? false : cell.isGolden,
+              // Keep cropId (assigned at watering), clear golden (re-rolled at fruit)
+              isGolden: false,
             };
             changed = true;
           }
