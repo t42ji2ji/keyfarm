@@ -7,11 +7,12 @@ export interface Point {
 
 export interface IsoBlock {
   top: Point[];   // 4 vertices of top face (diamond)
-  right: Point[]; // 4 vertices of right side face (NE-SE edge, visible)
-  front: Point[]; // 4 vertices of front side face (SW-SE edge, visible)
+  right: Point[]; // 4 vertices of the darker side face
+  front: Point[]; // 4 vertices of the lighter side face
 }
 
-/** Convert grid coordinates to screen position (isometric 2:1 projection). */
+/** Convert grid coordinates to screen position (isometric 2:1 projection).
+ *  flipFactor: 1 = normal (camera top-left), -1 = flipped (camera top-right). */
 export function gridToScreen(
   col: number,
   row: number,
@@ -19,14 +20,16 @@ export function gridToScreen(
   tileH: number,
   originX: number,
   originY: number,
+  flipFactor: number = 1,
 ): Point {
   return {
-    x: originX + (col - row) * tileW / 2,
+    x: originX + (col - row) * tileW / 2 * flipFactor,
     y: originY + (col + row) * tileH / 2,
   };
 }
 
-/** Compute the 3 visible face polygons for an isometric block. */
+/** Compute the 3 visible face polygons for an isometric block.
+ *  flipFactor controls which side face is visible. */
 export function computeBlockVertices(
   col: number,
   row: number,
@@ -36,12 +39,13 @@ export function computeBlockVertices(
   tileH: number,
   originX: number,
   originY: number,
+  flipFactor: number = 1,
 ): IsoBlock {
   // Base corners at grid level
-  const baseNW = gridToScreen(col, row, tileW, tileH, originX, originY);
-  const baseNE = gridToScreen(col + width, row, tileW, tileH, originX, originY);
-  const baseSE = gridToScreen(col + width, row + 1, tileW, tileH, originX, originY);
-  const baseSW = gridToScreen(col, row + 1, tileW, tileH, originX, originY);
+  const baseNW = gridToScreen(col, row, tileW, tileH, originX, originY, flipFactor);
+  const baseNE = gridToScreen(col + width, row, tileW, tileH, originX, originY, flipFactor);
+  const baseSE = gridToScreen(col + width, row + 1, tileW, tileH, originX, originY, flipFactor);
+  const baseSW = gridToScreen(col, row + 1, tileW, tileH, originX, originY, flipFactor);
 
   // Top face corners (shifted up by depth)
   const topNW: Point = { x: baseNW.x, y: baseNW.y - depth };
@@ -49,10 +53,21 @@ export function computeBlockVertices(
   const topSE: Point = { x: baseSE.x, y: baseSE.y - depth };
   const topSW: Point = { x: baseSW.x, y: baseSW.y - depth };
 
+  // Both visible side faces always share the SE corner (diamond bottom).
+  // In normal view: right=NE-SE (screen-right), front=SW-SE (screen-bottom-left).
+  // In flipped view the faces swap roles: right=SW-SE (screen-right), front=NE-SE (screen-left).
+  if (flipFactor < 0) {
+    return {
+      top: [topNW, topNE, topSE, topSW],
+      right: [topSW, topSE, baseSE, baseSW], // SW-SE edge, now screen-right, darker
+      front: [topNE, topSE, baseSE, baseNE], // NE-SE edge, now screen-left, lighter
+    };
+  }
+
   return {
     top: [topNW, topNE, topSE, topSW],
-    right: [topNE, topSE, baseSE, baseNE],
-    front: [topSW, topSE, baseSE, baseSW],
+    right: [topNE, topSE, baseSE, baseNE],  // NE-SE edge, screen-right, darker
+    front: [topSW, topSE, baseSE, baseSW],  // SW-SE edge, screen-bottom-left, lighter
   };
 }
 
@@ -62,6 +77,7 @@ export function computeCanvasBounds(
   tileH: number,
   maxDepth: number,
   padding: number,
+  flipFactor: number = 1,
 ): { width: number; height: number; originX: number; originY: number } {
   const maxCols = HHKB_ROWS.reduce((max, row) => {
     const rowCols = row.reduce((sum, k) => sum + k.width, 0);
@@ -69,8 +85,14 @@ export function computeCanvasBounds(
   }, 0);
   const numRows = HHKB_ROWS.length;
 
-  const minX = -numRows * tileW / 2;
-  const maxX = maxCols * tileW / 2;
+  // (col - row) * flipFactor ranges depend on flipFactor sign
+  const a = -numRows * flipFactor;
+  const b = maxCols * flipFactor;
+  const minXfactor = Math.min(a, b);
+  const maxXfactor = Math.max(a, b);
+
+  const minX = minXfactor * tileW / 2;
+  const maxX = maxXfactor * tileW / 2;
   const minY = -maxDepth;
   const maxY = (maxCols + numRows) * tileH / 2;
 

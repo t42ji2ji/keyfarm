@@ -1,73 +1,77 @@
-# React + TypeScript + Vite
+# KeyFarm
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Your keyboard is a farm. Every keystroke grows crops.
 
-Currently, two official plugins are available:
+KeyFarm is a desktop app that turns your daily typing into a tiny farming game. It sits in the corner of your screen, listening to your keyboard — each key is a plot of land on an isometric farm that grows through stages as you type.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+<p align="center">
+  <img src="docs/farm.png" width="600" alt="Isometric keyboard farm">
+</p>
 
-## React Compiler
+## Download
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Go to the [Releases](https://github.com/t42ji2ji/keyfarm/releases) page and download the latest version for your platform:
 
-## Expanding the ESLint configuration
+- **macOS** — `KeyFarm_x.x.x_universal.dmg`
+- **Windows** — `KeyFarm_x.x.x_x64-setup.exe`
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+> macOS users: After opening the DMG, drag KeyFarm to Applications. On first launch, right-click the app and select "Open" to bypass Gatekeeper.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## How It Works
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+Your keyboard is mapped as an HHKB-layout farm grid. When you press a key, the corresponding plot grows:
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+1. **Empty** → 3 presses → **Watering** (a random crop is assigned)
+2. **Watering** → 8 presses → **Sprout**
+3. **Sprout** → 15 presses → **Tree**
+4. **Tree** → 25 presses → **Fruit** (ready to harvest!)
+
+Click a fruiting plot to harvest it. The cycle resets and a new crop begins.
+
+<p align="center">
+  <img src="docs/perspective.png" width="600" alt="Flipped perspective view">
+</p>
+
+### Crops & Rarity
+
+There are 25 crops across 4 rarity tiers:
+
+| Rarity | Crops |
+|---|---|
+| Common | 🍎 🍊 🍋 🍇 🍑 🍒 |
+| Uncommon | 🍓 🍉 🍌 🍐 🥝 🐔 🐷 🐮 🐑 |
+| Rare | 🥭 🍍 🫐 🐱 🐶 🐰 |
+| Legendary | 🦊 🦄 🐉 🐼 |
+
+Every harvest has a **1% chance** of being golden.
+
+<p align="center">
+  <img src="docs/stats.png" width="600" alt="Farm stats panel showing collection progress">
+</p>
+
+### Heatmap View
+
+Switch to heatmap mode to see which keys you use the most. The height and color of each key reflects your total presses.
+
+<p align="center">
+  <img src="docs/heatmap.png" width="600" alt="Heatmap view showing keystroke frequency">
+</p>
+
+### Farm Events
+
+- **Pests** — Bugs randomly appear on growing crops and block progress. Click to remove them.
+- **Fallow** — Harvest the same key 3 times within 10 minutes and the soil needs a 3-minute rest.
+- **Overworked** — Mash a key 30 times in 5 seconds and it locks up for 20 seconds.
+
+## Permissions
+
+KeyFarm needs **Accessibility** permission on macOS to detect keystrokes. The app will prompt you to grant this on first launch.
+
+## Development
+
+```sh
+npm install
+npm run tauri dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+Requires [Node.js](https://nodejs.org/) 22+ and [Rust](https://rustup.rs/).

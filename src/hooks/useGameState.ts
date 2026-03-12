@@ -29,6 +29,7 @@ function defaultState(): GameState {
     harvestsByCrop: {},
     goldenHarvests: {},
     totalKeyPresses: {},
+    totalPestsRemoved: 0,
   };
 }
 
@@ -84,6 +85,7 @@ function parseState(raw: unknown): GameState {
       harvestsByCrop,
       goldenHarvests,
       totalKeyPresses: (parsed.totalKeyPresses as Record<string, number>) ?? {},
+      totalPestsRemoved: (parsed.totalPestsRemoved as number) ?? 0,
     };
   }
   return defaultState();
@@ -405,6 +407,7 @@ export function useGameState() {
       if (!c || !c.hasPest) return prev;
       return {
         ...prev,
+        totalPestsRemoved: (prev.totalPestsRemoved ?? 0) + 1,
         cells: {
           ...prev.cells,
           [keyCode]: { ...c, hasPest: false, pestSince: null },

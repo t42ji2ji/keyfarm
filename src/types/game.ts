@@ -36,13 +36,14 @@ export interface GameState {
   harvestsByCrop: Record<string, number>;
   goldenHarvests: Record<string, number>;
   totalKeyPresses: Record<string, number>;
+  totalPestsRemoved: number;
 }
 
 export const STAGE_THRESHOLDS: Record<string, number> = {
-  empty: 5,
-  watering: 15,
-  sprout: 30,
-  tree: 50,
+  empty: 3,
+  watering: 8,
+  sprout: 15,
+  tree: 25,
   fruit: 0,
   fallow: 0,
   overworked: 0,

@@ -23,7 +23,9 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.10.3", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-log = "2"
-core-graphics = "0.25"
-core-foundation = "0.10"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-store = "2.4.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.25"
+core-foundation = "0.10"

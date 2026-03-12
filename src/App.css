@@ -14,6 +14,106 @@
   translate: -50% -50%;
 }
 
+.app-container.is-dragging::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-radius: 10px;
+  pointer-events: none;
+  z-index: 100;
+  animation: drag-border-in 0.15s ease-out;
+}
+
+@keyframes drag-border-in {
+  from {
+    border-color: rgba(255, 255, 255, 0);
+  }
+  to {
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+}
+
+/* Permission screen */
+
+.permission-screen {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 18, 12, 0.94);
+  border-radius: 10px;
+}
+
+.permission-card {
+  text-align: center;
+  color: #e0e0e0;
+  padding: 40px;
+  max-width: 360px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.permission-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.permission-card h1 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  color: #fff;
+  letter-spacing: -0.01em;
+}
+
+.permission-card p {
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 0 0 28px;
+  color: #999;
+}
+
+.permission-card p strong {
+  color: #bbb;
+}
+
+.permission-card button {
+  background: #3a7a4a;
+  color: #fff;
+  border: none;
+  padding: 10px 28px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.permission-card button:hover {
+  background: #4a9a5a;
+}
+
+.permission-card button:active {
+  background: #2e6a3e;
+}
+
+.permission-hint {
+  display: block;
+  margin-top: 20px;
+  font-size: 11px;
+  color: #555;
+  animation: hint-pulse 2s ease-in-out infinite;
+}
+
+@keyframes hint-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* Resize grip */
+
 .resize-grip {
   position: absolute;
   bottom: 2px;
