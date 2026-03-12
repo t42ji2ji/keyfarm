@@ -30,6 +30,13 @@ export interface FarmCell {
   preOverworkedHitCount: number;
 }
 
+export interface DailyEntry {
+  date: string;       // 'YYYY-MM-DD'
+  keyPresses: number;
+  harvests: number;
+  pestsRemoved: number;
+}
+
 export interface GameState {
   cells: Record<string, FarmCell>;
   totalHarvested: number;
@@ -37,13 +44,14 @@ export interface GameState {
   goldenHarvests: Record<string, number>;
   totalKeyPresses: Record<string, number>;
   totalPestsRemoved: number;
+  dailyStats: DailyEntry[];
 }
 
 export const STAGE_THRESHOLDS: Record<string, number> = {
-  empty: 3,
-  watering: 8,
-  sprout: 15,
-  tree: 25,
+  empty: 5,
+  watering: 12,
+  sprout: 23,
+  tree: 38,
   fruit: 0,
   fallow: 0,
   overworked: 0,

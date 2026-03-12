@@ -27,6 +27,12 @@ import {
   drawHarvestAnimation,
   drawPestRemovalAnimation,
 } from './farmRenderers';
+import {
+  trySpawnCharacter,
+  updateCharacters,
+  renderCharacters,
+  cleanupCharacters,
+} from './roamingCharacters';
 
 const PADDING = 16;
 const HIT_FLASH_DURATION = 200;
@@ -93,10 +99,15 @@ interface FarmCanvasProps {
 
 export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onDragStart, viewMode, flipX }: FarmCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const cellBlocksRef = useRef<Map<string, IsoBlock>>(new Map());
   const rafRef = useRef<number>(0);
   const gameStateRef = useRef(gameState);
   gameStateRef.current = gameState;
+
+  useEffect(() => {
+    return () => cleanupCharacters();
+  }, []);
 
   const canvasWidth = CANVAS_WIDTH;
   const canvasHeight = CANVAS_HEIGHT;
@@ -268,6 +279,14 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onD
       });
     });
 
+    // ── Roaming characters ──
+    trySpawnCharacter(now);
+    updateCharacters(now);
+    if (overlayRef.current) {
+      renderCharacters(overlayRef.current, originX, originY, flipFactor, TILE_W, TILE_H, now);
+    }
+    hasActiveAnimations = true; // Keep loop alive for character spawn checks
+
     if (hasActiveAnimations) {
       rafRef.current = requestAnimationFrame(draw);
     }
@@ -346,13 +365,27 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onD
   const dpr = window.devicePixelRatio || 1;
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={canvasWidth * dpr}
-      height={canvasHeight * dpr}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      style={{ display: 'block', width: canvasWidth, height: canvasHeight }}
-    />
+    <div style={{ position: 'relative', width: canvasWidth, height: canvasHeight }}>
+      <canvas
+        ref={canvasRef}
+        width={canvasWidth * dpr}
+        height={canvasHeight * dpr}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        style={{ display: 'block', width: canvasWidth, height: canvasHeight }}
+      />
+      <div
+        ref={overlayRef}
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: canvasWidth,
+          height: canvasHeight,
+          pointerEvents: 'none',
+          overflow: 'hidden',
+        }}
+      />
+    </div>
   );
 }

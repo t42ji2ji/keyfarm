@@ -1,10 +1,23 @@
-import { useMemo } from 'react';
+import { useMemo, useCallback } from 'react';
 import type { GameState, Rarity } from '../types/game';
 import { CROPS, RARITY_COLORS } from '../data/crops';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const RARITY_ORDER: Rarity[] = ['legendary', 'rare', 'uncommon', 'common'];
 const RARITY_LABELS: Record<Rarity, string> = {
   common: 'Common', uncommon: 'Uncommon', rare: 'Rare', legendary: 'Legendary',
+};
+
+// Earthy palette matching the isometric farm
+const C = {
+  bg: '#1e1a16',
+  tile: '#2a2420',
+  tileBorder: '#3a332b',
+  tileHover: '#322b24',
+  text: '#d4c8b8',
+  textDim: '#7a6e5e',
+  border: '#3a332b',
+  empty: '#282220',
 };
 
 interface StatsPanelProps {
@@ -12,8 +25,13 @@ interface StatsPanelProps {
   onClose: () => void;
 }
 
+function getToday(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
-  const { harvestsByCrop, goldenHarvests, totalHarvested, totalKeyPresses, cells, totalPestsRemoved } = gameState;
+  const { harvestsByCrop, goldenHarvests, totalHarvested, totalKeyPresses, cells, totalPestsRemoved, dailyStats } = gameState;
 
   const totalPresses = useMemo(
     () => Object.values(totalKeyPresses).reduce((a, b) => a + b, 0),
@@ -25,13 +43,11 @@ export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
     [goldenHarvests],
   );
 
-  // Unique species discovered (at least 1 harvest)
   const speciesDiscovered = useMemo(
     () => CROPS.filter(c => (harvestsByCrop[c.id] ?? 0) > 0).length,
     [harvestsByCrop],
   );
 
-  // Rarest crop found
   const rarestCrop = useMemo(() => {
     const rarityRank: Record<Rarity, number> = { legendary: 4, rare: 3, uncommon: 2, common: 1 };
     let best: { crop: typeof CROPS[0]; count: number } | null = null;
@@ -46,7 +62,6 @@ export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
     return best;
   }, [harvestsByCrop]);
 
-  // Most harvested crop
   const mostHarvested = useMemo(() => {
     let best: { crop: typeof CROPS[0]; count: number } | null = null;
     for (const crop of CROPS) {
@@ -58,7 +73,6 @@ export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
     return best;
   }, [harvestsByCrop]);
 
-  // Sort keys by press count descending
   const sortedKeys = useMemo(() => {
     return Object.entries(totalKeyPresses)
       .filter(([code]) => !code.startsWith('_gap'))
@@ -68,7 +82,6 @@ export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
   const maxPresses = sortedKeys.length > 0 ? sortedKeys[0][1] : 1;
   const getLabel = (keyCode: string) => cells[keyCode]?.label ?? keyCode;
 
-  // Collection progress per rarity
   const rarityProgress = useMemo(() => {
     const result: Record<Rarity, { found: number; total: number }> = {
       legendary: { found: 0, total: 0 },
@@ -83,60 +96,214 @@ export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
     return result;
   }, [harvestsByCrop]);
 
+  const today = getToday();
+
+  // GitHub-style contribution grid: 7 rows (Mon–Sun) x N weeks
+  const gridData = useMemo(() => {
+    const stats = dailyStats ?? [];
+    const byDate = new Map(stats.map(s => [s.date, s]));
+
+    // Build day cells from first entry (or 14 weeks ago) to today, padded to full weeks
+    const endDate = new Date(today);
+    const firstDate = stats.length > 0
+      ? new Date(stats[0].date)
+      : new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate() - 13 * 7);
+
+    // Pad start to Monday of that week
+    const startDay = firstDate.getDay(); // 0=Sun
+    const mondayOffset = startDay === 0 ? 6 : startDay - 1;
+    const startDate = new Date(firstDate);
+    startDate.setDate(startDate.getDate() - mondayOffset);
+
+    const cells: { date: string; keyPresses: number; harvests: number; isToday: boolean; isFuture: boolean }[] = [];
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const entry = byDate.get(key);
+      const isFuture = d > endDate;
+      cells.push({
+        date: key,
+        keyPresses: entry?.keyPresses ?? 0,
+        harvests: entry?.harvests ?? 0,
+        isToday: key === today,
+        isFuture,
+      });
+    }
+
+    // Pad end to fill the last week (Sunday)
+    const remaining = (7 - (cells.length % 7)) % 7;
+    for (let i = 0; i < remaining; i++) {
+      const d = new Date(endDate);
+      d.setDate(d.getDate() + i + 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      cells.push({ date: key, keyPresses: 0, harvests: 0, isToday: false, isFuture: true });
+    }
+
+    const maxKeys = Math.max(1, ...cells.map(c => c.keyPresses));
+    const weeks = cells.length / 7;
+
+    // Month labels: find the first cell of each month
+    const monthLabels: { label: string; weekIdx: number }[] = [];
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    let lastMonth = -1;
+    for (let i = 0; i < cells.length; i++) {
+      const m = parseInt(cells[i].date.split('-')[1], 10) - 1;
+      if (m !== lastMonth) {
+        lastMonth = m;
+        monthLabels.push({ label: MONTHS[m], weekIdx: Math.floor(i / 7) });
+      }
+    }
+
+    return { cells, maxKeys, weeks, monthLabels };
+  }, [dailyStats, today]);
+
+  // Build segmented bar data: each segment = 1 species, colored by rarity
+  const collectionSegments = useMemo(() => {
+    const segments: { rarity: Rarity; discovered: boolean }[] = [];
+    for (const rarity of RARITY_ORDER) {
+      const crops = CROPS.filter(c => c.rarity === rarity);
+      for (const crop of crops) {
+        segments.push({ rarity, discovered: (harvestsByCrop[crop.id] ?? 0) > 0 });
+      }
+    }
+    return segments;
+  }, [harvestsByCrop]);
+
+  const handleOverlayMouseDown = useCallback((e: React.MouseEvent) => {
+    // Only drag from the overlay background, not the panel
+    if (e.target === e.currentTarget) {
+      e.preventDefault();
+      getCurrentWindow().startDragging();
+    }
+  }, []);
+
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
+    <div style={styles.overlay} onClick={onClose} onMouseDown={handleOverlayMouseDown}>
+      <div style={styles.panel} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
         {/* Header */}
         <div style={styles.header}>
           <span style={styles.title}>Farm Stats</span>
-          <button style={styles.closeBtn} onClick={onClose}>✕</button>
+          <button style={styles.closeBtn} onClick={onClose}>&times;</button>
         </div>
 
         <div style={styles.body}>
           {/* === HERO STATS === */}
           <div style={styles.heroSection}>
             <div style={styles.heroGrid}>
-              <div style={styles.heroCard}>
-                <div style={styles.heroNumber}>{totalPresses.toLocaleString()}</div>
-                <div style={styles.heroLabel}>Keystrokes</div>
-              </div>
-              <div style={styles.heroCard}>
-                <div style={styles.heroNumber}>{totalHarvested.toLocaleString()}</div>
-                <div style={styles.heroLabel}>Harvested</div>
-              </div>
-              <div style={styles.heroCard}>
-                <div style={{ ...styles.heroNumber, color: '#4ADE80' }}>{(totalPestsRemoved ?? 0).toLocaleString()}</div>
-                <div style={styles.heroLabel}>Pests Squashed</div>
-              </div>
-              <div style={styles.heroCard}>
-                <div style={{ ...styles.heroNumber, color: '#FFD700' }}>{totalGolden}</div>
-                <div style={styles.heroLabel}>Golden Harvests</div>
-              </div>
+              {[
+                { value: totalPresses.toLocaleString(), label: 'Keystrokes', color: C.text },
+                { value: totalHarvested.toLocaleString(), label: 'Harvested', color: C.text },
+                { value: (totalPestsRemoved ?? 0).toLocaleString(), label: 'Pests Squashed', color: '#4ADE80' },
+                { value: String(totalGolden), label: 'Golden', color: '#FFD700' },
+              ].map((stat, i) => (
+                <div key={i} style={styles.heroTile}>
+                  <div style={{ ...styles.heroNumber, color: stat.color }}>{stat.value}</div>
+                  <div style={styles.heroLabel}>{stat.label}</div>
+                </div>
+              ))}
             </div>
           </div>
+
+          {/* === ACTIVITY GRID (GitHub-style) === */}
+          {(
+            <div style={styles.section}>
+              <div style={styles.sectionTitle}>Activity</div>
+              <div style={styles.gridOuter}>
+                {/* Month labels row */}
+                <div style={{ display: 'flex', paddingLeft: 28 }}>
+                  {gridData.monthLabels.map((m, i) => (
+                    <div key={i} style={{
+                      position: 'absolute' as const,
+                      left: 28 + m.weekIdx * 13,
+                      fontSize: 8,
+                      color: C.textDim,
+                      fontFamily: 'monospace',
+                    }}>
+                      {m.label}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', marginTop: 14 }}>
+                  {/* Day-of-week labels */}
+                  <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 2, marginRight: 4 }}>
+                    {['Mon', '', 'Wed', '', 'Fri', '', ''].map((label, i) => (
+                      <div key={i} style={{ height: 10, fontSize: 8, lineHeight: '10px', color: C.textDim, fontFamily: 'monospace', textAlign: 'right' as const, width: 20 }}>
+                        {label}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Grid columns (weeks) */}
+                  <div style={{ display: 'flex', gap: 2 }}>
+                    {Array.from({ length: gridData.weeks }, (_, weekIdx) => (
+                      <div key={weekIdx} style={{ display: 'flex', flexDirection: 'column' as const, gap: 2 }}>
+                        {Array.from({ length: 7 }, (_, dayIdx) => {
+                          const cell = gridData.cells[weekIdx * 7 + dayIdx];
+                          if (!cell) return <div key={dayIdx} style={{ width: 10, height: 10 }} />;
+                          const level = cell.isFuture ? -1
+                            : cell.keyPresses === 0 ? 0
+                            : cell.keyPresses <= gridData.maxKeys * 0.25 ? 1
+                            : cell.keyPresses <= gridData.maxKeys * 0.5 ? 2
+                            : cell.keyPresses <= gridData.maxKeys * 0.75 ? 3
+                            : 4;
+                          const colors = ['#3a332b', '#4d3f2a', '#5c4a30', '#7a6235', '#9a7b3a'];
+                          return (
+                            <div
+                              key={dayIdx}
+                              title={cell.isFuture ? '' : `${cell.date}: ${cell.keyPresses} keys, ${cell.harvests} harvests`}
+                              style={{
+                                width: 10,
+                                height: 10,
+                                borderRadius: 2,
+                                background: level < 0 ? 'transparent' : colors[level],
+                                outline: cell.isToday ? '1.5px solid #d4c8b8' : 'none',
+                                outlineOffset: -0.5,
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {/* Legend */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, justifyContent: 'flex-end' }}>
+                  <span style={{ fontSize: 8, color: C.textDim, fontFamily: 'monospace' }}>Less</span>
+                  {['#3a332b', '#4d3f2a', '#5c4a30', '#7a6235', '#9a7b3a'].map((color, i) => (
+                    <div key={i} style={{ width: 10, height: 10, borderRadius: 2, background: color }} />
+                  ))}
+                  <span style={{ fontSize: 8, color: C.textDim, fontFamily: 'monospace' }}>More</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* === COLLECTION PROGRESS === */}
           <div style={styles.section}>
             <div style={styles.sectionTitle}>
-              Collection — {speciesDiscovered}/{CROPS.length} species
+              Collection &mdash; {speciesDiscovered}/{CROPS.length}
             </div>
-            <div style={styles.collectionBar}>
-              <div style={{
-                ...styles.collectionFill,
-                width: `${(speciesDiscovered / CROPS.length) * 100}%`,
-              }} />
+            {/* Segmented block bar */}
+            <div style={styles.segmentedBar}>
+              {collectionSegments.map((seg, i) => (
+                <div
+                  key={i}
+                  style={{
+                    width: 5,
+                    height: 10,
+                    background: seg.discovered ? RARITY_COLORS[seg.rarity] : C.empty,
+                    borderRadius: 1,
+                  }}
+                />
+              ))}
             </div>
-            <div style={styles.rarityProgressRow}>
+            <div style={styles.rarityRow}>
               {RARITY_ORDER.map(rarity => {
                 const p = rarityProgress[rarity];
                 return (
-                  <div key={rarity} style={styles.rarityProgressItem}>
-                    <span style={{ color: RARITY_COLORS[rarity], fontSize: 10, fontWeight: 600 }}>
+                  <div key={rarity} style={styles.rarityItem}>
+                    <span style={{ color: RARITY_COLORS[rarity], fontSize: 10, fontWeight: 700 }}>
                       {RARITY_LABELS[rarity]}
                     </span>
-                    <span style={styles.rarityProgressCount}>
-                      {p.found}/{p.total}
-                    </span>
+                    <span style={styles.rarityCount}>{p.found}/{p.total}</span>
                   </div>
                 );
               })}
@@ -148,24 +315,24 @@ export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
             <div style={styles.section}>
               <div style={styles.highlightRow}>
                 {rarestCrop && (
-                  <div style={styles.highlightCard}>
-                    <div style={styles.highlightEmoji}>{rarestCrop.crop.emoji}</div>
-                    <div style={styles.highlightText}>
-                      <span style={{ color: RARITY_COLORS[rarestCrop.crop.rarity], fontSize: 10, fontWeight: 600, textTransform: 'uppercase' as const }}>
+                  <div style={styles.highlightTile}>
+                    <span style={styles.highlightEmoji}>{rarestCrop.crop.emoji}</span>
+                    <div>
+                      <div style={{ color: RARITY_COLORS[rarestCrop.crop.rarity], fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.06em' }}>
                         Rarest Find
-                      </span>
-                      <span style={styles.highlightName}>{rarestCrop.crop.id}</span>
+                      </div>
+                      <div style={styles.highlightName}>{rarestCrop.crop.id}</div>
                     </div>
                   </div>
                 )}
                 {mostHarvested && (
-                  <div style={styles.highlightCard}>
-                    <div style={styles.highlightEmoji}>{mostHarvested.crop.emoji}</div>
-                    <div style={styles.highlightText}>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase' as const }}>
+                  <div style={styles.highlightTile}>
+                    <span style={styles.highlightEmoji}>{mostHarvested.crop.emoji}</span>
+                    <div>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: C.textDim, textTransform: 'uppercase' as const, letterSpacing: '0.06em' }}>
                         Most Harvested
-                      </span>
-                      <span style={styles.highlightName}>{mostHarvested.crop.id} x{mostHarvested.count}</span>
+                      </div>
+                      <div style={styles.highlightName}>{mostHarvested.crop.id} x{mostHarvested.count}</div>
                     </div>
                   </div>
                 )}
@@ -179,32 +346,41 @@ export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
             {RARITY_ORDER.map(rarity => {
               const crops = CROPS.filter(c => c.rarity === rarity);
               return (
-                <div key={rarity} style={{ marginBottom: 12 }}>
+                <div key={rarity} style={{ marginBottom: 10 }}>
                   <div style={{
                     color: RARITY_COLORS[rarity],
-                    fontSize: 10,
-                    fontWeight: 600,
+                    fontSize: 9,
+                    fontWeight: 700,
                     textTransform: 'uppercase' as const,
-                    letterSpacing: '0.08em',
-                    marginBottom: 6,
+                    letterSpacing: '0.1em',
+                    marginBottom: 4,
                   }}>
                     {RARITY_LABELS[rarity]}
                   </div>
-                  <div style={styles.fruitGrid}>
+                  <div style={styles.cropGrid}>
                     {crops.map(crop => {
                       const count = harvestsByCrop[crop.id] ?? 0;
                       const golden = goldenHarvests[crop.id] ?? 0;
                       const discovered = count > 0;
+                      const hasGolden = golden > 0;
                       return (
                         <div key={crop.id} style={{
-                          ...styles.fruitItem,
-                          opacity: discovered ? 1 : 0.3,
+                          ...styles.cropTile,
+                          opacity: discovered ? 1 : 0.35,
+                          ...(hasGolden ? {
+                            border: '2px solid #FFD700',
+                            background: 'rgba(255, 215, 0, 0.08)',
+                          } : {}),
                         }}>
-                          <span style={styles.fruitEmoji}>{discovered ? crop.emoji : '?'}</span>
-                          <span style={styles.fruitCount}>{count}</span>
-                          {golden > 0 && (
-                            <span style={{ fontSize: 10, color: '#FFD700' }}>✨{golden}</span>
-                          )}
+                          <span style={{ fontSize: 22, lineHeight: '1' }}>{discovered ? crop.emoji : '?'}</span>
+                          <span style={styles.cropCount}>
+                            {count}
+                            {hasGolden && (
+                              <span style={{ color: '#FFD700', marginLeft: 2, fontSize: 14 }}>
+                                {' '}✨{golden}
+                              </span>
+                            )}
+                          </span>
                         </div>
                       );
                     })}
@@ -217,26 +393,41 @@ export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
           {/* === KEY PRESSES === */}
           <div style={styles.section}>
             <div style={styles.sectionTitle}>
-              Key Presses — {totalPresses.toLocaleString()} total
+              Keys &mdash; {totalPresses.toLocaleString()}
             </div>
             <div style={styles.keyList}>
               {sortedKeys.length === 0 && (
-                <div style={styles.emptyHint}>Start typing to see stats</div>
-              )}
-              {sortedKeys.map(([keyCode, count]) => (
-                <div key={keyCode} style={styles.keyRow}>
-                  <span style={styles.keyLabel}>{getLabel(keyCode)}</span>
-                  <div style={styles.barTrack}>
-                    <div
-                      style={{
-                        ...styles.barFill,
-                        width: `${(count / maxPresses) * 100}%`,
-                      }}
-                    />
-                  </div>
-                  <span style={styles.keyCount}>{count.toLocaleString()}</span>
+                <div style={{ color: C.textDim, fontSize: 12, textAlign: 'center' as const, padding: 16 }}>
+                  Start typing to see stats
                 </div>
-              ))}
+              )}
+              {sortedKeys.map(([keyCode, count]) => {
+                const ratio = count / maxPresses;
+                // Number of filled blocks out of 20
+                const blocks = 20;
+                const filled = Math.round(ratio * blocks);
+                return (
+                  <div key={keyCode} style={styles.keyRow}>
+                    <span style={styles.keyLabel}>{getLabel(keyCode)}</span>
+                    <div style={styles.blockBar}>
+                      {Array.from({ length: blocks }, (_, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            flex: 1,
+                            height: 8,
+                            background: i < filled
+                              ? `hsl(${100 - ratio * 60}, 55%, ${40 + ratio * 10}%)`
+                              : C.empty,
+                            borderRadius: 1,
+                          }}
+                        />
+                      ))}
+                    </div>
+                    <span style={styles.keyCount}>{count.toLocaleString()}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -249,45 +440,45 @@ const styles: Record<string, React.CSSProperties> = {
   overlay: {
     position: 'absolute',
     inset: 0,
-    background: 'rgba(0, 0, 0, 0.6)',
+    background: 'rgba(0, 0, 0, 0.65)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 100,
   },
   panel: {
-    background: 'rgba(30, 28, 24, 0.95)',
-    borderRadius: 16,
-    border: '1px solid rgba(255, 255, 255, 0.1)',
+    background: C.bg,
+    borderRadius: 4,
+    border: `2px solid ${C.border}`,
     width: 620,
     maxHeight: '90vh',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
   },
   header: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '16px 20px 12px',
-    borderBottom: '1px solid rgba(255,255,255,0.08)',
+    padding: '12px 16px 10px',
+    borderBottom: `2px solid ${C.border}`,
+    background: C.tile,
   },
   title: {
-    color: '#e8e0d4',
-    fontSize: 18,
-    fontWeight: 600,
+    color: C.text,
+    fontSize: 16,
+    fontWeight: 700,
     fontFamily: 'system-ui, -apple-system, sans-serif',
-    letterSpacing: '-0.02em',
+    letterSpacing: '-0.01em',
   },
   closeBtn: {
     background: 'none',
-    border: 'none',
-    color: 'rgba(255,255,255,0.4)',
+    border: `1px solid ${C.tileBorder}`,
+    color: C.textDim,
     fontSize: 16,
     cursor: 'pointer',
-    padding: '4px 8px',
-    borderRadius: 6,
+    padding: '2px 8px',
+    borderRadius: 2,
     lineHeight: 1,
   },
   body: {
@@ -298,137 +489,133 @@ const styles: Record<string, React.CSSProperties> = {
 
   // Hero stats
   heroSection: {
-    padding: '20px 20px 8px',
+    padding: '12px 16px 4px',
   },
   heroGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(4, 1fr)',
-    gap: 10,
+    gap: 6,
   },
-  heroCard: {
+  heroTile: {
     textAlign: 'center' as const,
-    padding: '14px 8px',
-    borderRadius: 12,
-    background: 'rgba(255,255,255,0.04)',
-    border: '1px solid rgba(255,255,255,0.06)',
+    padding: '10px 4px',
+    borderRadius: 3,
+    background: C.tile,
+    border: `1px solid ${C.tileBorder}`,
   },
   heroNumber: {
-    color: '#e8e0d4',
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: 700,
-    fontFamily: 'system-ui, -apple-system, monospace',
+    fontFamily: 'system-ui, monospace',
     fontVariantNumeric: 'tabular-nums',
-    letterSpacing: '-0.02em',
     lineHeight: 1.1,
   },
   heroLabel: {
-    color: 'rgba(255,255,255,0.4)',
-    fontSize: 10,
-    fontWeight: 500,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.06em',
-    marginTop: 6,
-    fontFamily: 'system-ui, -apple-system, sans-serif',
-  },
-
-  // Collection progress
-  section: {
-    padding: '14px 20px',
-  },
-  sectionTitle: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 11,
-    fontWeight: 500,
+    color: C.textDim,
+    fontSize: 9,
+    fontWeight: 600,
     textTransform: 'uppercase' as const,
     letterSpacing: '0.08em',
-    marginBottom: 10,
-    fontFamily: 'system-ui, -apple-system, sans-serif',
+    marginTop: 4,
+    fontFamily: 'system-ui, sans-serif',
   },
-  collectionBar: {
-    height: 6,
-    borderRadius: 3,
-    background: 'rgba(255,255,255,0.06)',
-    overflow: 'hidden',
+
+  // Collection
+  section: {
+    padding: '10px 16px',
+  },
+  sectionTitle: {
+    color: C.textDim,
+    fontSize: 10,
+    fontWeight: 600,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.1em',
     marginBottom: 8,
+    fontFamily: 'system-ui, sans-serif',
   },
-  collectionFill: {
-    height: '100%',
-    borderRadius: 3,
-    background: 'linear-gradient(90deg, #7EC850, #F59E0B)',
-    transition: 'width 0.3s ease',
-  },
-  rarityProgressRow: {
+  segmentedBar: {
     display: 'flex',
-    gap: 16,
+    gap: 1,
+    marginBottom: 6,
+    padding: 3,
+    background: C.tile,
+    border: `1px solid ${C.tileBorder}`,
+    borderRadius: 2,
   },
-  rarityProgressItem: {
+  rarityRow: {
+    display: 'flex',
+    gap: 12,
+  },
+  rarityItem: {
     display: 'flex',
     alignItems: 'center',
     gap: 4,
   },
-  rarityProgressCount: {
-    color: 'rgba(255,255,255,0.4)',
+  rarityCount: {
+    color: C.textDim,
     fontSize: 10,
-    fontFamily: 'system-ui, -apple-system, monospace',
+    fontFamily: 'monospace',
     fontVariantNumeric: 'tabular-nums',
   },
 
   // Highlights
   highlightRow: {
     display: 'flex',
-    gap: 10,
+    gap: 6,
   },
-  highlightCard: {
+  highlightTile: {
     flex: 1,
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
-    padding: '10px 14px',
-    borderRadius: 10,
-    background: 'rgba(255,255,255,0.04)',
-    border: '1px solid rgba(255,255,255,0.06)',
+    gap: 8,
+    padding: '8px 10px',
+    borderRadius: 3,
+    background: C.tile,
+    border: `1px solid ${C.tileBorder}`,
   },
   highlightEmoji: {
-    fontSize: 28,
+    fontSize: 26,
     lineHeight: 1,
   },
-  highlightText: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: 2,
-  },
   highlightName: {
-    color: '#e8e0d4',
-    fontSize: 13,
-    fontWeight: 500,
+    color: C.text,
+    fontSize: 12,
+    fontWeight: 600,
     textTransform: 'capitalize' as const,
-    fontFamily: 'system-ui, -apple-system, sans-serif',
+    fontFamily: 'system-ui, sans-serif',
   },
 
-  // Fruit grid
-  fruitGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(56px, 1fr))',
-    gap: 6,
+  // Activity grid
+  gridOuter: {
+    position: 'relative' as const,
+    padding: '8px 10px 6px',
+    background: C.tile,
+    border: `1px solid ${C.tileBorder}`,
+    borderRadius: 3,
+    overflowX: 'auto' as const,
   },
-  fruitItem: {
+
+  // Crop grid
+  cropGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(50px, 1fr))',
+    gap: 4,
+  },
+  cropTile: {
     display: 'flex',
     flexDirection: 'column' as const,
     alignItems: 'center',
-    gap: 4,
-    padding: '10px 0',
-    borderRadius: 10,
-    background: 'rgba(255,255,255,0.04)',
-    transition: 'opacity 0.2s',
+    gap: 2,
+    padding: '8px 0 6px',
+    borderRadius: 3,
+    background: C.tile,
+    border: `1px solid ${C.tileBorder}`,
   },
-  fruitEmoji: {
-    fontSize: 24,
-  },
-  fruitCount: {
-    color: '#e8e0d4',
-    fontSize: 16,
+  cropCount: {
+    color: C.text,
+    fontSize: 13,
     fontWeight: 600,
-    fontFamily: 'system-ui, -apple-system, monospace',
+    fontFamily: 'monospace',
     fontVariantNumeric: 'tabular-nums',
   },
 
@@ -436,51 +623,35 @@ const styles: Record<string, React.CSSProperties> = {
   keyList: {
     display: 'flex',
     flexDirection: 'column' as const,
-    gap: 3,
+    gap: 2,
   },
   keyRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
-    height: 24,
+    gap: 8,
+    height: 22,
   },
   keyLabel: {
-    color: '#e8e0d4',
-    fontSize: 12,
-    fontWeight: 500,
-    fontFamily: 'system-ui, -apple-system, monospace',
-    width: 48,
+    color: C.text,
+    fontSize: 11,
+    fontWeight: 600,
+    fontFamily: 'monospace',
+    width: 44,
     textAlign: 'right' as const,
     flexShrink: 0,
   },
-  barTrack: {
+  blockBar: {
     flex: 1,
-    height: 6,
-    borderRadius: 3,
-    background: 'rgba(255,255,255,0.06)',
-    overflow: 'hidden',
-  },
-  barFill: {
-    height: '100%',
-    borderRadius: 3,
-    background: 'linear-gradient(90deg, #7EC850, #4A90D9)',
-    transition: 'width 0.3s ease',
+    display: 'flex',
+    gap: 1,
   },
   keyCount: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 11,
-    fontFamily: 'system-ui, -apple-system, monospace',
+    color: C.textDim,
+    fontSize: 10,
+    fontFamily: 'monospace',
     fontVariantNumeric: 'tabular-nums',
-    width: 48,
+    width: 44,
     textAlign: 'right' as const,
     flexShrink: 0,
   },
-  emptyHint: {
-    color: 'rgba(255,255,255,0.3)',
-    fontSize: 13,
-    textAlign: 'center' as const,
-    padding: 20,
-    fontFamily: 'system-ui, -apple-system, sans-serif',
-  },
-
 };

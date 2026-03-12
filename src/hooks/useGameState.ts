@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { LazyStore } from '@tauri-apps/plugin-store';
-import type { GameState, FarmStage, FarmCell } from '../types/game';
+import type { GameState, FarmStage, FarmCell, DailyEntry } from '../types/game';
 import {
   STAGE_THRESHOLDS,
   NEXT_STAGE,
@@ -21,6 +21,30 @@ import { createInitialCells } from '../data/hhkbLayout';
 
 const STORE_KEY = 'gameState';
 const store = new LazyStore('store.json');
+const DAILY_STATS_MAX_DAYS = 14;
+
+function getToday(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function ensureToday(dailyStats: DailyEntry[]): DailyEntry[] {
+  const today = getToday();
+  if (dailyStats.length > 0 && dailyStats[dailyStats.length - 1].date === today) {
+    return dailyStats;
+  }
+  return [...dailyStats, { date: today, keyPresses: 0, harvests: 0, pestsRemoved: 0 }]
+    .slice(-DAILY_STATS_MAX_DAYS);
+}
+
+function incrementDaily(
+  dailyStats: DailyEntry[],
+  field: 'keyPresses' | 'harvests' | 'pestsRemoved',
+): DailyEntry[] {
+  const stats = ensureToday(dailyStats);
+  const last = stats[stats.length - 1];
+  return [...stats.slice(0, -1), { ...last, [field]: last[field] + 1 }];
+}
 
 function defaultState(): GameState {
   return {
@@ -30,6 +54,7 @@ function defaultState(): GameState {
     goldenHarvests: {},
     totalKeyPresses: {},
     totalPestsRemoved: 0,
+    dailyStats: [],
   };
 }
 
@@ -86,6 +111,7 @@ function parseState(raw: unknown): GameState {
       goldenHarvests,
       totalKeyPresses: (parsed.totalKeyPresses as Record<string, number>) ?? {},
       totalPestsRemoved: (parsed.totalPestsRemoved as number) ?? 0,
+      dailyStats: (parsed.dailyStats as DailyEntry[]) ?? [],
     };
   }
   return defaultState();
@@ -159,8 +185,10 @@ export function useGameState() {
           [keyCode]: (prev.totalKeyPresses[keyCode] ?? 0) + 1,
         };
 
+        const newDailyStats = incrementDaily(prev.dailyStats, 'keyPresses');
+
         if (!cell) {
-          return { ...prev, totalKeyPresses: newTotalKeyPresses };
+          return { ...prev, totalKeyPresses: newTotalKeyPresses, dailyStats: newDailyStats };
         }
 
         // --- Overworked detection ---
@@ -178,6 +206,7 @@ export function useGameState() {
           return {
             ...prev,
             totalKeyPresses: newTotalKeyPresses,
+            dailyStats: newDailyStats,
             cells: {
               ...prev.cells,
               [keyCode]: {
@@ -193,17 +222,17 @@ export function useGameState() {
 
         // Skip growth for overworked or fallow cells
         if (cell.stage === 'overworked' || cell.stage === 'fallow') {
-          return { ...prev, totalKeyPresses: newTotalKeyPresses };
+          return { ...prev, totalKeyPresses: newTotalKeyPresses, dailyStats: newDailyStats };
         }
 
         // Skip growth for pest-infested cells
         if (cell.hasPest) {
-          return { ...prev, totalKeyPresses: newTotalKeyPresses };
+          return { ...prev, totalKeyPresses: newTotalKeyPresses, dailyStats: newDailyStats };
         }
 
         // Skip growth for fruit cells (fully grown)
         if (cell.stage === 'fruit') {
-          return { ...prev, totalKeyPresses: newTotalKeyPresses };
+          return { ...prev, totalKeyPresses: newTotalKeyPresses, dailyStats: newDailyStats };
         }
 
         // --- Normal growth ---
@@ -235,6 +264,7 @@ export function useGameState() {
         return {
           ...prev,
           totalKeyPresses: newTotalKeyPresses,
+          dailyStats: newDailyStats,
           cells: {
             ...prev.cells,
             [keyCode]: {
@@ -384,6 +414,7 @@ export function useGameState() {
         totalHarvested: prev.totalHarvested + 1,
         harvestsByCrop: newHarvestsByCrop,
         goldenHarvests: newGoldenHarvests,
+        dailyStats: incrementDaily(prev.dailyStats, 'harvests'),
         cells: {
           ...prev.cells,
           [keyCode]: {
@@ -408,6 +439,7 @@ export function useGameState() {
       return {
         ...prev,
         totalPestsRemoved: (prev.totalPestsRemoved ?? 0) + 1,
+        dailyStats: incrementDaily(prev.dailyStats, 'pestsRemoved'),
         cells: {
           ...prev.cells,
           [keyCode]: { ...c, hasPest: false, pestSince: null },

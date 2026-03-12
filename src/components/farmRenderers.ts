@@ -358,7 +358,7 @@ export function drawKeyLabel(
   ctx.restore();
 
   if (cell && stage !== 'fruit' && stage !== 'empty' && stage !== 'fallow' && stage !== 'overworked') {
-    const threshold = { watering: 15, sprout: 30, tree: 50 }[stage] || 1;
+    const threshold = { watering: 12, sprout: 23, tree: 38 }[stage] || 1;
     const progress = cell.hitCount / threshold;
     if (progress > 0) {
       ctx.save();
