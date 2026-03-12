@@ -34,16 +34,7 @@ Click a fruiting plot to harvest it. The cycle resets and a new crop begins.
 
 ### Crops & Rarity
 
-There are 25 crops across 4 rarity tiers:
-
-| Rarity | Crops |
-|---|---|
-| Common | 🍎 🍊 🍋 🍇 🍑 🍒 |
-| Uncommon | 🍓 🍉 🍌 🍐 🥝 🐔 🐷 🐮 🐑 |
-| Rare | 🥭 🍍 🫐 🐱 🐶 🐰 |
-| Legendary | 🦊 🦄 🐉 🐼 |
-
-Every harvest has a **1% chance** of being golden.
+There are 100 crops to discover across 4 rarity tiers — from common fruits to legendary creatures. Collect them all!
 
 <p align="center">
   <img src="docs/stats.png" width="600" alt="Farm stats panel showing collection progress">
