@@ -184,6 +184,50 @@ export function drawStageEmoji(
   }
 }
 
+/** Draw a pulsing glow effect on harvest-ready (fruit stage) tiles. */
+export function drawHarvestReadyGlow(
+  dc: DrawContext,
+  block: IsoBlock,
+  color: string,
+): void {
+  const { ctx, now } = dc;
+  const topCenter = polygonCentroid(block.top);
+
+  // Breathing pulse (0.6s cycle)
+  const pulse = 0.5 + 0.5 * Math.sin(now / 600 * Math.PI * 2);
+
+  // Soft glow under the block
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8 + pulse * 10;
+  ctx.fillStyle = 'rgba(0,0,0,0)';
+  ctx.beginPath();
+  const top = block.top;
+  ctx.moveTo(top[0].x, top[0].y);
+  for (let i = 1; i < top.length; i++) ctx.lineTo(top[i].x, top[i].y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // Pulsing bright overlay on top face
+  const overlayAlpha = 0.08 + 0.12 * pulse;
+  fillPoly(ctx, block.top, `rgba(255, 255, 255, ${overlayAlpha})`, false);
+
+  // Small floating sparkle dots
+  for (let i = 0; i < 4; i++) {
+    const angle = (now / 1200) + (Math.PI * 2 * i) / 4;
+    const floatY = Math.sin(now / 500 + i * 1.5) * 4;
+    const radius = 14;
+    const sx = topCenter.x + Math.cos(angle) * radius;
+    const sy = topCenter.y + Math.sin(angle) * radius * 0.5 - 6 + floatY;
+    const dotAlpha = 0.4 + 0.4 * Math.sin(now / 400 + i * Math.PI * 0.5);
+    ctx.fillStyle = `rgba(255, 255, 255, ${dotAlpha})`;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 /** Draw golden glow, sparkles, and shimmer overlay for a golden crop. */
 export function drawGoldenEffect(
   dc: DrawContext,

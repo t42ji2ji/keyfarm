@@ -19,6 +19,7 @@ import {
   drawFarmBlock,
   drawHitFlash,
   drawStageEmoji,
+  drawHarvestReadyGlow,
   drawGoldenEffect,
   drawPestOverlay,
   drawCountdownTimer,
@@ -225,6 +226,11 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onD
         const topCenter = polygonCentroid(block.top);
 
         drawStageEmoji(ctx, stage, cell, topCenter);
+
+        if (stage === 'fruit') {
+          hasActiveAnimations = true;
+          drawHarvestReadyGlow(dc, block, color);
+        }
 
         if (cell?.isGolden && stage === 'fruit') {
           hasActiveAnimations = true;
