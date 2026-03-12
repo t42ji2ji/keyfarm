@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
@@ -13,6 +14,8 @@ struct TrayMenuItems {
     perspective: MenuItem<tauri::Wry>,
 }
 
+struct WindowVisible(AtomicBool);
+struct WindowPinned(AtomicBool);
 struct HeatmapState(AtomicBool);
 struct PerspectiveState(AtomicBool);
 struct ListenerStarted(AtomicBool);
@@ -445,8 +448,10 @@ fn start_keyboard_listener(app_handle: tauri::AppHandle) {
 // --- Window / Tray / Shortcut ---
 
 fn toggle_window(app: &tauri::AppHandle) {
+    let state = app.state::<WindowVisible>();
+    let was_visible = state.0.fetch_xor(true, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().unwrap_or(false) {
+        if was_visible {
             let _ = window.hide();
         } else {
             let _ = window.show();
@@ -456,13 +461,11 @@ fn toggle_window(app: &tauri::AppHandle) {
 }
 
 fn update_tray_menu_labels(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let visible = window.is_visible().unwrap_or(false);
-        let pinned = window.is_always_on_top().unwrap_or(false);
-        let items = app.state::<TrayMenuItems>();
-        let _ = items.show.set_text(if visible { "Hide Window" } else { "Show Window" });
-        let _ = items.pin.set_text(if pinned { "Unpin from Top" } else { "Pin to Top" });
-    }
+    let visible = app.state::<WindowVisible>().0.load(Ordering::SeqCst);
+    let pinned = app.state::<WindowPinned>().0.load(Ordering::SeqCst);
+    let items = app.state::<TrayMenuItems>();
+    let _ = items.show.set_text(if visible { "Hide Window" } else { "Show Window" });
+    let _ = items.pin.set_text(if pinned { "Unpin from Top" } else { "Pin to Top" });
 }
 
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -493,9 +496,10 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     update_tray_menu_labels(app);
                 }
                 "pin" => {
+                    let pinned = app.state::<WindowPinned>();
+                    let was_pinned = pinned.0.fetch_xor(true, Ordering::SeqCst);
                     if let Some(window) = app.get_webview_window("main") {
-                        let is_on_top = window.is_always_on_top().unwrap_or(false);
-                        let _ = window.set_always_on_top(!is_on_top);
+                        let _ = window.set_always_on_top(!was_pinned);
                     }
                     update_tray_menu_labels(app);
                 }
@@ -514,11 +518,14 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = app.emit("toggle-perspective", ());
                 }
                 "stats" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        if !window.is_visible().unwrap_or(true) {
+                    let visible = app.state::<WindowVisible>();
+                    if !visible.0.load(Ordering::SeqCst) {
+                        visible.0.store(true, Ordering::SeqCst);
+                        if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
+                        update_tray_menu_labels(app);
                     }
                     let _ = app.emit("toggle-stats", ());
                 }
@@ -563,7 +570,36 @@ pub fn run() {
         ])
         .setup(|app| {
             app.manage(ListenerStarted(AtomicBool::new(false)));
+            app.manage(WindowVisible(AtomicBool::new(true)));
+            app.manage(WindowPinned(AtomicBool::new(true)));
             setup_tray(app)?;
+
+            // Workaround: transparent windows can disappear when dragged to a
+            // display with a different backing scale factor (macOS WebKit bug).
+            // A debounced 1px resize after move forces a redraw.
+            if let Some(window) = app.get_webview_window("main") {
+                let w = window.clone();
+                let pending = Arc::new(AtomicBool::new(false));
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Moved(_) = event {
+                        if !pending.swap(true, Ordering::SeqCst) {
+                            let w = w.clone();
+                            let pending = pending.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(150));
+                                if let Ok(size) = w.outer_size() {
+                                    let _ = w.set_size(tauri::PhysicalSize::new(
+                                        size.width + 1,
+                                        size.height,
+                                    ));
+                                    let _ = w.set_size(size);
+                                }
+                                pending.store(false, Ordering::SeqCst);
+                            });
+                        }
+                    }
+                });
+            }
 
             let shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyK);
             app.global_shortcut().register(shortcut)?;
