@@ -25,3 +25,16 @@ dist-ssr
 
 # Build/signing scripts
 sign-and-build.sh
+
+# AI tool configs
+.agent/
+.agents/
+.claude/
+.factory/
+.kiro/
+.trae/
+.windsurf/
+skills-lock.json
+
+# Promo / Remotion
+promo/
