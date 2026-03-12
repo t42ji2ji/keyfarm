@@ -156,6 +156,28 @@ export function drawHitFlash(
   fillPoly(ctx, block.front, overlayColor, false);
 }
 
+// ── Emoji pre-render cache (drawImage interpolates sub-pixel smoothly) ──
+
+const emojiCache = new Map<string, HTMLCanvasElement>();
+const EMOJI_SIZE = 40;
+
+function getEmojiCanvas(emoji: string): HTMLCanvasElement {
+  let canvas = emojiCache.get(emoji);
+  if (canvas) return canvas;
+  const dpr = window.devicePixelRatio || 1;
+  canvas = document.createElement('canvas');
+  canvas.width = EMOJI_SIZE * dpr;
+  canvas.height = EMOJI_SIZE * dpr;
+  const c = canvas.getContext('2d')!;
+  c.scale(dpr, dpr);
+  c.font = '20px serif';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText(emoji, EMOJI_SIZE / 2, EMOJI_SIZE / 2);
+  emojiCache.set(emoji, canvas);
+  return canvas;
+}
+
 // ── Decorations ────────────────────────────────────────────────────
 
 /** Draw the emoji corresponding to the current growth stage. */
@@ -164,6 +186,7 @@ export function drawStageEmoji(
   stage: FarmStage,
   cell: FarmCell | undefined,
   topCenter: { x: number; y: number },
+  now: number,
 ): void {
   let emoji = '';
   if (stage === 'fruit' && cell?.cropId) {
@@ -176,7 +199,18 @@ export function drawStageEmoji(
     emoji = STAGE_EMOJI[stage] || '';
   }
 
-  if (emoji) {
+  if (!emoji) return;
+
+  if (stage === 'fruit') {
+    const floatY = Math.sin(now / 800) * 5;
+    const emojiCanvas = getEmojiCanvas(emoji);
+    ctx.drawImage(
+      emojiCanvas,
+      topCenter.x - EMOJI_SIZE / 2,
+      topCenter.y - 2 - EMOJI_SIZE / 2 + floatY,
+      EMOJI_SIZE, EMOJI_SIZE,
+    );
+  } else {
     ctx.font = '20px serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';

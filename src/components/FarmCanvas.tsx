@@ -225,7 +225,7 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onD
         // Decorations
         const topCenter = polygonCentroid(block.top);
 
-        drawStageEmoji(ctx, stage, cell, topCenter);
+        drawStageEmoji(ctx, stage, cell, topCenter, now);
 
         if (stage === 'fruit') {
           hasActiveAnimations = true;
