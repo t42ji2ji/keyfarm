@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react';
-import type { GameState, FarmStage, AnimalInstance } from '../types/game';
+import type { GameState, FarmStage } from '../types/game';
 import { HHKB_ROWS } from '../data/hhkbLayout';
 import type { AnimationState } from '../hooks/useGameState';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -120,13 +120,12 @@ interface FarmCanvasProps {
   onRemovePest: (keyCode: string) => void;
   onFertilize: (keyCode: string) => void;
   onDuckEaten: (duckId: string) => void;
-  onAnimalsUpdated: (animals: AnimalInstance[]) => void;
   onDragStart?: () => void;
   viewMode: 'farm' | 'heatmap';
   flipX: boolean;
 }
 
-export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onFertilize, onDuckEaten, onAnimalsUpdated, onDragStart, viewMode, flipX }: FarmCanvasProps) {
+export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onFertilize, onDuckEaten, onDragStart, viewMode, flipX }: FarmCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const cellBlocksRef = useRef<Map<string, IsoBlock>>(new Map());

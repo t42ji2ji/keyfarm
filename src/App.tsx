@@ -151,7 +151,7 @@ function App() {
         className="canvas-scaler"
         style={{ transform: `scale(${scale})` }}
       >
-        <FarmCanvas gameState={gameState} animations={animations} onHarvest={harvest} onRemovePest={removePest} onFertilize={fertilize} onDuckEaten={handleDuckEaten} onAnimalsUpdated={updateAnimals} onDragStart={handleDragStart} viewMode={viewMode} flipX={isoFlipped} />
+        <FarmCanvas gameState={gameState} animations={animations} onHarvest={harvest} onRemovePest={removePest} onFertilize={fertilize} onDuckEaten={handleDuckEaten} onDragStart={handleDragStart} viewMode={viewMode} flipX={isoFlipped} />
       </div>
       {showStats && (
         <StatsPanel gameState={gameState} onClose={() => setShowStats(false)} onHireWorker={hireWorker} onUpgradeSpeed={upgradeWorkerSpeed} />
