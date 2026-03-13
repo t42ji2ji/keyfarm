@@ -29,7 +29,7 @@ function PermissionScreen() {
 }
 
 function App() {
-  const { gameState, harvest, removePest, hireWorker, upgradeWorkerSpeed, fertilize, updateAnimals, animations } = useGameState();
+  const { gameState, harvest, removePest, hireWorker, upgradeWorkerSpeed, fertilize, updateAnimals, duckAttacked, animations } = useGameState();
   const [scale, setScale] = useState(1);
   const [showStats, setShowStats] = useState(false);
   const [viewMode, setViewMode] = useState<'farm' | 'heatmap'>('farm');
@@ -151,7 +151,7 @@ function App() {
         className="canvas-scaler"
         style={{ transform: `scale(${scale})` }}
       >
-        <FarmCanvas gameState={gameState} animations={animations} onHarvest={harvest} onRemovePest={removePest} onFertilize={fertilize} onDuckEaten={handleDuckEaten} onDragStart={handleDragStart} viewMode={viewMode} flipX={isoFlipped} />
+        <FarmCanvas gameState={gameState} animations={animations} onHarvest={harvest} onRemovePest={removePest} onFertilize={fertilize} onDuckEaten={handleDuckEaten} onDuckAttacked={duckAttacked} onDragStart={handleDragStart} viewMode={viewMode} flipX={isoFlipped} />
       </div>
       {showStats && (
         <StatsPanel gameState={gameState} onClose={() => setShowStats(false)} onHireWorker={hireWorker} onUpgradeSpeed={upgradeWorkerSpeed} />

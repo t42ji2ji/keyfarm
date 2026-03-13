@@ -86,6 +86,8 @@ export interface AnimalInstance {
   workStartTime: number;
   diedAt: number | null;
   nextActionTime: number;
+  restUntil: number;
+  workCount: number;
 }
 
 // ── Worker upgrade tiers ────────────────────────────────────────────

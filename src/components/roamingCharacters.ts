@@ -1,263 +1,344 @@
-import cameraGif from "../assets/camera.gif";
-import cattGif from "../assets/catt.gif";
-import coldGif from "../assets/cold.gif";
-import danceGif from "../assets/dance.gif";
-import dancefrogGif from "../assets/dancefrog.gif";
-import gogoGif from "../assets/gogo.gif";
-import noGif from "../assets/no.gif";
-import runfrongGif from "../assets/runfrong.gif";
-import runningGif from "../assets/running.gif";
+import farmerIdleGif from "../assets/farmer-idle.gif";
+import farmerWalkGif from "../assets/farmer-walk.gif";
+import farmerHarvestGif from "../assets/farmer-harvest.gif";
+import farmerAttackGif from "../assets/farmer-attack.gif";
 import { gridToScreen } from "../utils/isometric";
+import type { FarmCell } from "../types/game";
+import { SPEED_TIERS } from "../types/game";
 
 // ── Constants ───────────────────────────────────────────────────────
-const MAX_CHARACTERS = 3;
-const SPAWN_CHECK_MIN = 8000;
-const SPAWN_CHECK_MAX = 15000;
-const SPAWN_CHANCE = 0.5;
-const LIFESPAN_MIN = 240000;
-const LIFESPAN_MAX = 300000;
-const FADE_IN_MS = 500;
-const FADE_OUT_MS = 1000;
-const MOVE_DURATION_MIN = 3500;
-const MOVE_DURATION_MAX = 5000;
-const IDLE_MIN = 1500;
-const IDLE_MAX = 3000;
-const SIZE_MIN = 28;
-const SIZE_MAX = 36;
+const FARMER_SIZE = 56;
+const MOVE_SPEED = 3; // grid units per second
+const WORK_DURATION = 1000; // ms to play harvest/attack animation before triggering
+const NO_TARGET_RETRY = 3000; // retry interval when no target found
 
-// Farm bounds (grid coordinates)
-const COL_MIN = 1;
-const COL_MAX = 14;
-const ROW_MIN = 0;
-const ROW_MAX = 4;
-
-// ── GIF sources ─────────────────────────────────────────────────────
-const GIF_SRCS = [
-  cattGif,
-  danceGif,
-  dancefrogGif,
-  noGif,
-  runfrongGif,
-  runningGif,
-  cameraGif,
-  gogoGif,
-  coldGif,
+// Starting positions for each worker
+const SPAWN_POSITIONS = [
+  { col: 7.5, row: 2 },
+  { col: 3, row: 1 },
+  { col: 12, row: 3 },
+  { col: 5, row: 0.5 },
+  { col: 10, row: 3.5 },
 ];
 
-// ── Character state ─────────────────────────────────────────────────
-interface RoamingCharacter {
+// ── Farmer state ────────────────────────────────────────────────────
+type FarmerDisplayState = "idle" | "walking" | "harvest" | "attack";
+
+const DISPLAY_GIFS: Record<FarmerDisplayState, string> = {
+  idle: farmerIdleGif,
+  walking: farmerWalkGif,
+  harvest: farmerHarvestGif,
+  attack: farmerAttackGif,
+};
+
+interface FarmerState {
   id: number;
-  gifSrc: string;
-  el: HTMLImageElement | null;
   col: number;
   row: number;
-  targetCol: number;
-  targetRow: number;
   startCol: number;
   startRow: number;
+  targetCol: number;
+  targetRow: number;
   moveStartTime: number;
   moveDuration: number;
-  state: "moving" | "idle";
-  idleUntil: number;
+  state: "idle" | "walking" | "working";
   facingLeft: boolean;
-  size: number;
-  spawnTime: number;
-  despawnTime: number;
+  el: HTMLImageElement | null;
+  displayState: FarmerDisplayState | null;
+  nextActionTime: number;
+  targetKeyCode: string | null;
+  targetType: "harvest" | "pest" | null;
+  workEndTime: number;
 }
 
-let characters: RoamingCharacter[] = [];
-let nextId = 0;
-let lastSpawnCheck = 0;
-let nextSpawnDelay = randomBetween(SPAWN_CHECK_MIN, SPAWN_CHECK_MAX);
+let farmers: FarmerState[] = [];
 
 function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
-}
-
-function randomInt(min: number, max: number): number {
-  return Math.floor(randomBetween(min, max + 1));
-}
-
-function pickRandomTarget(
-  currentCol: number,
-  currentRow: number
-): { col: number; row: number } {
-  const steps = randomInt(1, 3);
-  const dcol = randomInt(-steps, steps);
-  const drow = randomInt(-steps, steps);
-  const col = Math.max(
-    COL_MIN,
-    Math.min(COL_MAX, Math.round(currentCol + dcol))
-  );
-  const row = Math.max(
-    ROW_MIN,
-    Math.min(ROW_MAX, Math.round(currentRow + drow))
-  );
-  if (col === Math.round(currentCol) && row === Math.round(currentRow)) {
-    return { col: Math.min(COL_MAX, col + 1), row };
-  }
-  return { col, row };
 }
 
 function easeInOutQuad(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 }
 
-// ── Public API ──────────────────────────────────────────────────────
+/** Get keyCodes already targeted by other farmers (walking to or working on). */
+function getClaimedTargets(excludeId: number): Set<string> {
+  const claimed = new Set<string>();
+  for (const f of farmers) {
+    if (f.id !== excludeId && f.targetKeyCode) {
+      claimed.add(f.targetKeyCode);
+    }
+  }
+  return claimed;
+}
 
-export function trySpawnCharacter(now: number): void {
-  if (lastSpawnCheck === 0) {
-    lastSpawnCheck = now;
-    nextSpawnDelay = 1000;
-    return;
+function findTarget(
+  farmer: FarmerState,
+  cells: Record<string, FarmCell>
+): {
+  keyCode: string;
+  col: number;
+  row: number;
+  type: "harvest" | "pest";
+} | null {
+  const claimed = getClaimedTargets(farmer.id);
+
+  const targets: {
+    keyCode: string;
+    col: number;
+    row: number;
+    type: "harvest" | "pest";
+    dist: number;
+  }[] = [];
+
+  for (const [keyCode, cell] of Object.entries(cells)) {
+    if (keyCode.startsWith("_gap")) continue;
+    if (claimed.has(keyCode)) continue;
+
+    const col = cell.col + cell.width / 2;
+    const row = cell.row + 0.5;
+    const dist = Math.hypot(col - farmer.col, row - farmer.row);
+
+    if (cell.hasPest) {
+      targets.push({ keyCode, col, row, type: "pest", dist });
+    } else if (cell.stage === "fruit") {
+      targets.push({ keyCode, col, row, type: "harvest", dist });
+    }
   }
 
-  if (now - lastSpawnCheck < nextSpawnDelay) return;
-  lastSpawnCheck = now;
-  nextSpawnDelay = randomBetween(SPAWN_CHECK_MIN, SPAWN_CHECK_MAX);
+  if (targets.length === 0) return null;
 
-  if (characters.length >= MAX_CHARACTERS) return;
-  if (characters.length > 0 && Math.random() > SPAWN_CHANCE) return;
-  if (GIF_SRCS.length === 0) return;
+  // Prioritize pests first, then pick closest
+  targets.sort((a, b) => {
+    if (a.type === "pest" && b.type !== "pest") return -1;
+    if (a.type !== "pest" && b.type === "pest") return 1;
+    return a.dist - b.dist;
+  });
 
-  const gifSrc = GIF_SRCS[randomInt(0, GIF_SRCS.length - 1)];
-  const col = randomInt(COL_MIN, COL_MAX);
-  const row = randomInt(ROW_MIN, ROW_MAX);
-  const lifespan = randomBetween(LIFESPAN_MIN, LIFESPAN_MAX);
+  return targets[0];
+}
 
-  const char: RoamingCharacter = {
-    id: nextId++,
-    gifSrc,
-    el: null,
-    col,
-    row,
-    targetCol: col,
-    targetRow: row,
-    startCol: col,
-    startRow: row,
+function createFarmer(id: number, now: number): FarmerState {
+  const pos = SPAWN_POSITIONS[id] ?? SPAWN_POSITIONS[0];
+  return {
+    id,
+    col: pos.col,
+    row: pos.row,
+    startCol: pos.col,
+    startRow: pos.row,
+    targetCol: pos.col,
+    targetRow: pos.row,
     moveStartTime: 0,
     moveDuration: 0,
     state: "idle",
-    idleUntil: now + randomBetween(IDLE_MIN, IDLE_MAX),
     facingLeft: false,
-    size: randomInt(SIZE_MIN, SIZE_MAX),
-    spawnTime: now,
-    despawnTime: now + lifespan,
+    el: null,
+    displayState: null,
+    nextActionTime: now + randomBetween(3000, 5000) + id * 2000, // stagger starts
+    targetKeyCode: null,
+    targetType: null,
+    workEndTime: 0,
   };
-
-  characters.push(char);
 }
 
-export function updateCharacters(now: number): void {
-  for (const c of characters) {
-    if (c.state === "idle" && now >= c.idleUntil) {
-      const target = pickRandomTarget(c.col, c.row);
-      c.startCol = c.col;
-      c.startRow = c.row;
-      c.targetCol = target.col;
-      c.targetRow = target.row;
-      c.moveStartTime = now;
-      c.moveDuration = randomBetween(MOVE_DURATION_MIN, MOVE_DURATION_MAX);
-      c.facingLeft = target.col < c.col;
-      c.state = "moving";
+function updateSingleFarmer(
+  farmer: FarmerState,
+  now: number,
+  cells: Record<string, FarmCell>,
+  callbacks: FarmerCallbacks,
+  speedLevel: number
+): void {
+  const tier = SPEED_TIERS[speedLevel - 1] ?? SPEED_TIERS[0];
+  switch (farmer.state) {
+    case "idle": {
+      if (now >= farmer.nextActionTime) {
+        const target = findTarget(farmer, cells);
+        if (target) {
+          const dist = Math.hypot(
+            target.col - farmer.col,
+            target.row - farmer.row
+          );
+
+          // If already at target, skip to working
+          if (dist < 0.3) {
+            farmer.col = target.col;
+            farmer.row = target.row;
+            farmer.targetKeyCode = target.keyCode;
+            farmer.targetType = target.type;
+            farmer.state = "working";
+            farmer.workEndTime = now + WORK_DURATION;
+            break;
+          }
+
+          farmer.startCol = farmer.col;
+          farmer.startRow = farmer.row;
+          farmer.targetCol = target.col;
+          farmer.targetRow = target.row;
+          farmer.targetKeyCode = target.keyCode;
+          farmer.targetType = target.type;
+          farmer.facingLeft = target.col < farmer.col;
+          farmer.moveDuration = (dist / MOVE_SPEED) * 1000;
+          farmer.moveStartTime = now;
+          farmer.state = "walking";
+        } else {
+          farmer.nextActionTime = now + NO_TARGET_RETRY;
+        }
+      }
+      break;
     }
 
-    if (c.state === "moving") {
-      const elapsed = now - c.moveStartTime;
-      const t = Math.min(1, elapsed / c.moveDuration);
+    case "walking": {
+      const elapsed = now - farmer.moveStartTime;
+      const t = Math.min(1, elapsed / farmer.moveDuration);
       const eased = easeInOutQuad(t);
-      c.col = c.startCol + (c.targetCol - c.startCol) * eased;
-      c.row = c.startRow + (c.targetRow - c.startRow) * eased;
+      farmer.col =
+        farmer.startCol + (farmer.targetCol - farmer.startCol) * eased;
+      farmer.row =
+        farmer.startRow + (farmer.targetRow - farmer.startRow) * eased;
 
       if (t >= 1) {
-        c.col = c.targetCol;
-        c.row = c.targetRow;
-        c.state = "idle";
-        c.idleUntil = now + randomBetween(IDLE_MIN, IDLE_MAX);
+        farmer.col = farmer.targetCol;
+        farmer.row = farmer.targetRow;
+        farmer.state = "working";
+        farmer.workEndTime = now + WORK_DURATION;
       }
+      break;
+    }
+
+    case "working": {
+      if (now >= farmer.workEndTime) {
+        if (farmer.targetKeyCode) {
+          const cell = cells[farmer.targetKeyCode];
+          if (cell) {
+            if (farmer.targetType === "pest" && cell.hasPest) {
+              callbacks.onRemovePest(farmer.targetKeyCode);
+            } else if (
+              farmer.targetType === "harvest" &&
+              cell.stage === "fruit"
+            ) {
+              callbacks.onHarvest(farmer.targetKeyCode);
+            }
+          }
+        }
+        farmer.state = "idle";
+        farmer.targetKeyCode = null;
+        farmer.targetType = null;
+        farmer.nextActionTime =
+          now + randomBetween(tier.intervalMin, tier.intervalMax);
+      }
+      break;
     }
   }
-
-  // Remove fully faded-out characters and clean up their DOM elements
-  characters = characters.filter((c) => {
-    const fadeOutEnd = c.despawnTime + FADE_OUT_MS;
-    if (now >= fadeOutEnd) {
-      c.el?.remove();
-      return false;
-    }
-    return true;
-  });
 }
 
-export function hasCharacters(): boolean {
-  return characters.length > 0;
-}
-
-/**
- * Render characters as positioned <img> elements in the overlay div.
- * The browser natively animates GIFs this way.
- */
-export function renderCharacters(
+function renderSingleFarmer(
+  farmer: FarmerState,
   overlay: HTMLDivElement,
   originX: number,
   originY: number,
   flipFactor: number,
   tileW: number,
-  tileH: number,
-  now: number
+  tileH: number
 ): void {
-  for (const c of characters) {
-    // Create DOM element on first render
-    if (!c.el) {
-      const img = document.createElement("img");
-      img.src = c.gifSrc;
-      img.style.position = "absolute";
-      img.style.pointerEvents = "none";
-      img.style.imageRendering = "auto";
-      img.dataset.charId = String(c.id);
-      overlay.appendChild(img);
-      c.el = img;
-    }
+  // Create DOM element on first render
+  if (!farmer.el) {
+    const img = document.createElement("img");
+    img.src = farmerIdleGif;
+    img.style.position = "absolute";
+    img.style.pointerEvents = "none";
+    img.style.imageRendering = "pixelated";
+    img.dataset.farmerId = String(farmer.id);
+    overlay.appendChild(img);
+    farmer.el = img;
+    farmer.displayState = "idle";
+  }
 
-    // Compute opacity
-    let opacity = 1;
-    const fadeInAge = now - c.spawnTime;
-    if (fadeInAge < FADE_IN_MS) {
-      opacity = fadeInAge / FADE_IN_MS;
-    }
-    if (now >= c.despawnTime) {
-      const fadeOutAge = now - c.despawnTime;
-      opacity = Math.max(0, 1 - fadeOutAge / FADE_OUT_MS);
-    }
+  // Switch GIF based on state
+  let wantDisplay: FarmerDisplayState = "idle";
+  if (farmer.state === "walking") {
+    wantDisplay = "walking";
+  } else if (farmer.state === "working") {
+    wantDisplay = farmer.targetType === "pest" ? "attack" : "harvest";
+  }
+  if (farmer.displayState !== wantDisplay) {
+    farmer.el.src = DISPLAY_GIFS[wantDisplay];
+    farmer.displayState = wantDisplay;
+  }
 
-    // Convert grid position to screen (center of tile)
-    const screen = gridToScreen(
-      c.col + 0.5,
-      c.row + 0.5,
-      tileW,
-      tileH,
-      originX,
-      originY,
-      flipFactor
-    );
-    const drawX = screen.x;
-    const drawY = screen.y - 20;
+  // Convert grid position to screen — feet at tile center
+  const screen = gridToScreen(
+    farmer.col,
+    farmer.row,
+    tileW,
+    tileH,
+    originX,
+    originY,
+    flipFactor
+  );
+  const drawX = screen.x;
+  const drawY = screen.y - 8;
 
-    const scaleX = c.facingLeft ? -1 : 1;
+  const flipSign = flipFactor < 0 ? -1 : 1;
+  const scaleX = (farmer.facingLeft ? -1 : 1) * flipSign;
 
-    c.el.style.width = `${c.size}px`;
-    c.el.style.height = `${c.size}px`;
-    c.el.style.opacity = String(opacity);
-    c.el.style.transform = `translate(${drawX - c.size / 2}px, ${drawY - c.size / 2}px) scaleX(${scaleX})`;
-    c.el.style.zIndex = String(Math.round(c.row * 100));
+  farmer.el.style.width = `${FARMER_SIZE}px`;
+  farmer.el.style.height = `${FARMER_SIZE}px`;
+  farmer.el.style.opacity = "1";
+  farmer.el.style.transform = `translate(${drawX - FARMER_SIZE / 2}px, ${drawY - FARMER_SIZE}px) scaleX(${scaleX})`;
+  farmer.el.style.zIndex = String(Math.round(farmer.row * 100) + 50);
+}
+
+// ── Callbacks interface ─────────────────────────────────────────────
+export interface FarmerCallbacks {
+  onHarvest: (keyCode: string) => void;
+  onRemovePest: (keyCode: string) => void;
+}
+
+// ── Public API ──────────────────────────────────────────────────────
+
+export function updateFarmer(
+  now: number,
+  cells: Record<string, FarmCell>,
+  callbacks: FarmerCallbacks,
+  workerCount: number,
+  speedLevel: number = 1
+): void {
+  // Spawn new farmers if needed
+  while (farmers.length < workerCount) {
+    farmers.push(createFarmer(farmers.length, now));
+  }
+
+  // Remove excess farmers if workerCount decreased (unlikely but safe)
+  while (farmers.length > workerCount) {
+    const removed = farmers.pop();
+    removed?.el?.remove();
+  }
+
+  for (const f of farmers) {
+    updateSingleFarmer(f, now, cells, callbacks, speedLevel);
   }
 }
 
-/** Clean up all character DOM elements (for unmount). */
-export function cleanupCharacters(): void {
-  for (const c of characters) {
-    c.el?.remove();
+export function renderFarmer(
+  overlay: HTMLDivElement,
+  originX: number,
+  originY: number,
+  flipFactor: number,
+  tileW: number,
+  tileH: number
+): void {
+  for (const f of farmers) {
+    renderSingleFarmer(f, overlay, originX, originY, flipFactor, tileW, tileH);
   }
-  characters = [];
-  lastSpawnCheck = 0;
+}
+
+export function cleanupFarmer(): void {
+  for (const f of farmers) {
+    f.el?.remove();
+  }
+  farmers = [];
+}
+
+export function hasFarmer(): boolean {
+  return farmers.length > 0;
 }

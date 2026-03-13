@@ -25,6 +25,7 @@ import {
   DUCK_RESPAWN_DELAY,
 } from '../types/game';
 import { createDuck } from '../components/animalCharacters';
+import { createDog } from '../components/dogCharacter';
 import { getRandomCrop } from '../data/crops';
 import { createInitialCells } from '../data/hhkbLayout';
 
@@ -170,8 +171,20 @@ export function useGameState() {
     store.get<GameState>(STORE_KEY).then((raw) => {
       if (raw) {
         const loaded = parseState(raw);
+        // Ensure a dog always exists
+        const hasDog = loaded.animals.some(a => a.animalId === 'dog');
+        if (!hasDog) {
+          loaded.animals = [...loaded.animals, createDog('dog-main', Date.now())];
+        }
         setGameState(loaded);
         stateRef.current = loaded;
+      } else {
+        // Default state — spawn dog
+        setGameState((prev) => {
+          const hasDog = prev.animals.some(a => a.animalId === 'dog');
+          if (hasDog) return prev;
+          return { ...prev, animals: [...prev.animals, createDog('dog-main', Date.now())] };
+        });
       }
       loadedRef.current = true;
     });
@@ -499,12 +512,34 @@ export function useGameState() {
           }
         : prev.goldenHarvests;
 
+      const newTotalHarvested = prev.totalHarvested + 1;
+
+      // Check if we just crossed a duck spawn tier threshold — spawn immediately
+      let newAnimals = prev.animals;
+      let oldCap = 0;
+      let newCap = 0;
+      for (const tier of DUCK_SPAWN_TIERS) {
+        if (prev.totalHarvested >= tier.harvests) oldCap = tier.cap;
+        if (newTotalHarvested >= tier.harvests) newCap = tier.cap;
+      }
+      if (newCap > oldCap) {
+        const aliveDucks = prev.animals.filter(
+          a => a.animalId === 'duck' && a.state !== 'dead'
+        ).length;
+        if (aliveDucks < newCap) {
+          const id = `duck-${Date.now()}-imm`;
+          const newDuck = createDuck(id, now);
+          newAnimals = [...prev.animals, newDuck];
+        }
+      }
+
       return {
         ...prev,
-        totalHarvested: prev.totalHarvested + 1,
+        totalHarvested: newTotalHarvested,
         harvestsByCrop: newHarvestsByCrop,
         goldenHarvests: newGoldenHarvests,
         dailyStats: incrementDaily(prev.dailyStats, 'harvests'),
+        animals: newAnimals,
         cells: {
           ...prev.cells,
           [keyCode]: {
@@ -573,6 +608,16 @@ export function useGameState() {
     });
   }, []);
 
+  const duckAttacked = useCallback((duckId: string) => {
+    const now = Date.now();
+    setGameState((prev) => ({
+      ...prev,
+      animals: prev.animals.map(a =>
+        a.id === duckId ? { ...a, state: 'dead' as const, diedAt: now } : a
+      ),
+    }));
+  }, []);
+
   const updateAnimals = useCallback((animals: AnimalInstance[]) => {
     setGameState((prev) => ({ ...prev, animals }));
   }, []);
@@ -620,5 +665,5 @@ export function useGameState() {
     });
   }, []);
 
-  return { gameState, harvest, removePest, hireWorker, upgradeWorkerSpeed, fertilize, updateAnimals, animations: animRef.current };
+  return { gameState, harvest, removePest, hireWorker, upgradeWorkerSpeed, fertilize, updateAnimals, duckAttacked, animations: animRef.current };
 }

@@ -40,6 +40,12 @@ import {
   cleanupDucks,
   setMouseGridPosition,
 } from './animalCharacters';
+import {
+  updateDogs,
+  renderDogs,
+  cleanupDogs,
+  setDogMousePosition,
+} from './dogCharacter';
 
 const PADDING = 16;
 const HIT_FLASH_DURATION = 200;
@@ -120,12 +126,13 @@ interface FarmCanvasProps {
   onRemovePest: (keyCode: string) => void;
   onFertilize: (keyCode: string) => void;
   onDuckEaten: (duckId: string) => void;
+  onDuckAttacked: (duckId: string) => void;
   onDragStart?: () => void;
   viewMode: 'farm' | 'heatmap';
   flipX: boolean;
 }
 
-export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onFertilize, onDuckEaten, onDragStart, viewMode, flipX }: FarmCanvasProps) {
+export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onFertilize, onDuckEaten, onDuckAttacked, onDragStart, viewMode, flipX }: FarmCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const cellBlocksRef = useRef<Map<string, IsoBlock>>(new Map());
@@ -137,6 +144,7 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
     return () => {
       cleanupFarmer();
       cleanupDucks();
+      cleanupDogs();
     };
   }, []);
 
@@ -342,13 +350,24 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
         originX, originY, flipFactor, TILE_W, TILE_H,
       );
     }
+    // ── Dog character ──
+    updateDogs(now, gameStateRef.current.animals, {
+      onDuckAttacked: (duckId: string) => onDuckAttacked(duckId),
+    });
+    if (overlayRef.current) {
+      renderDogs(
+        gameStateRef.current.animals,
+        overlayRef.current,
+        originX, originY, flipFactor, TILE_W, TILE_H,
+      );
+    }
 
-    hasActiveAnimations = true; // Keep loop alive for farmer + ducks
+    hasActiveAnimations = true; // Keep loop alive for farmer + ducks + dog
 
     if (hasActiveAnimations) {
       rafRef.current = requestAnimationFrame(draw);
     }
-  }, [animations, viewMode, onHarvest, onRemovePest, onFertilize, onDuckEaten]);
+  }, [animations, viewMode, onHarvest, onRemovePest, onFertilize, onDuckEaten, onDuckAttacked]);
 
   // Kick off flip animation when flipX changes
   useEffect(() => {
@@ -385,6 +404,7 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
     const interpOriginX = _boundsNormal.originX * (1 - t) + _boundsFlipped.originX * t;
     const gridPos = screenToGrid(x, y, TILE_W, TILE_H, interpOriginX, _boundsNormal.originY, flipFactorRef.current);
     setMouseGridPosition(gridPos.col, gridPos.row);
+    setDogMousePosition(gridPos.col, gridPos.row);
 
     let overFruit = false;
     for (const [keyCode, block] of cellBlocksRef.current.entries()) {

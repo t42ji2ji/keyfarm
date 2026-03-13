@@ -1,7 +1,10 @@
 import { useMemo, useCallback } from 'react';
 import type { GameState, Rarity } from '../types/game';
+import { WORKER_TIERS, MAX_WORKERS, SPEED_TIERS, MAX_SPEED_LEVEL, DUCK_SPAWN_TIERS } from '../types/game';
 import { CROPS, RARITY_COLORS } from '../data/crops';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import farmerTurnGif from '../assets/farmer-turn360.gif';
+import farmerIdleGif from '../assets/farmer-idle.gif';
 
 const RARITY_ORDER: Rarity[] = ['legendary', 'rare', 'uncommon', 'common'];
 const RARITY_LABELS: Record<Rarity, string> = {
@@ -23,6 +26,8 @@ const C = {
 interface StatsPanelProps {
   gameState: GameState;
   onClose: () => void;
+  onHireWorker: () => void;
+  onUpgradeSpeed: () => void;
 }
 
 function getToday(): string {
@@ -30,8 +35,8 @@ function getToday(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
-  const { harvestsByCrop, goldenHarvests, totalHarvested, totalKeyPresses, cells, totalPestsRemoved, dailyStats } = gameState;
+export function StatsPanel({ gameState, onClose, onHireWorker, onUpgradeSpeed }: StatsPanelProps) {
+  const { harvestsByCrop, goldenHarvests, totalHarvested, totalKeyPresses, cells, totalPestsRemoved, dailyStats, workers, workerSpeed } = gameState;
 
   const totalPresses = useMemo(
     () => Object.values(totalKeyPresses).reduce((a, b) => a + b, 0),
@@ -181,7 +186,14 @@ export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
       <div style={styles.panel} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
         {/* Header */}
         <div style={styles.header}>
-          <span style={styles.title}>Farm Stats</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <img
+              src={farmerTurnGif}
+              alt="Farmer"
+              style={{ width: 32, height: 32, imageRendering: 'pixelated' }}
+            />
+            <span style={styles.title}>Farm Stats</span>
+          </div>
           <button style={styles.closeBtn} onClick={onClose}>&times;</button>
         </div>
 
@@ -200,6 +212,174 @@ export function StatsPanel({ gameState, onClose }: StatsPanelProps) {
                   <div style={styles.heroLabel}>{stat.label}</div>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* === DUCKS === */}
+          {(() => {
+            let duckCap = 0;
+            for (const tier of DUCK_SPAWN_TIERS) {
+              if (totalHarvested >= tier.harvests) duckCap = tier.cap;
+            }
+            const aliveDucks = gameState.animals.filter(
+              a => a.animalId === 'duck' && a.state !== 'dead'
+            ).length;
+            const nextTier = DUCK_SPAWN_TIERS.find(t => t.harvests > totalHarvested);
+            return duckCap > 0 || nextTier ? (
+              <div style={styles.section}>
+                <div style={styles.sectionTitle}>
+                  Ducks &mdash; {aliveDucks}/{duckCap}
+                </div>
+                {nextTier && (
+                  <div style={{ fontSize: 9, color: C.textDim, fontFamily: 'monospace' }}>
+                    Next duck at {totalHarvested}/{nextTier.harvests} harvests (cap {nextTier.cap})
+                  </div>
+                )}
+              </div>
+            ) : null;
+          })()}
+
+          {/* === WORKERS === */}
+          <div style={styles.section}>
+            <div style={styles.sectionTitle}>Workers &mdash; {workers}/{MAX_WORKERS}</div>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' as const }}>
+              {WORKER_TIERS.map((tier, i) => {
+                const hired = i < workers;
+                const isNext = i === workers;
+                const meetsHarvests = totalHarvested >= tier.harvests;
+                const meetsSpecies = speciesDiscovered >= tier.species;
+                const meetsGolden = totalGolden >= tier.golden;
+                const canHire = isNext && meetsHarvests && meetsSpecies && meetsGolden;
+
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column' as const,
+                      alignItems: 'center',
+                      gap: 2,
+                      padding: '6px 8px',
+                      borderRadius: 3,
+                      background: hired ? C.tile : C.empty,
+                      border: canHire
+                        ? '1.5px solid #4ADE80'
+                        : `1px solid ${hired ? C.tileBorder : C.border}`,
+                      opacity: hired ? 1 : isNext ? 0.9 : 0.4,
+                      minWidth: 52,
+                    }}
+                  >
+                    <img
+                      src={hired ? farmerTurnGif : farmerIdleGif}
+                      alt={`Worker ${i + 1}`}
+                      style={{
+                        width: 24,
+                        height: 24,
+                        imageRendering: 'pixelated',
+                        filter: hired ? 'none' : 'grayscale(1)',
+                      }}
+                    />
+                    {hired ? (
+                      <span style={{ fontSize: 8, color: C.textDim, fontFamily: 'monospace' }}>#{i + 1}</span>
+                    ) : isNext ? (
+                      <button
+                        onClick={canHire ? onHireWorker : undefined}
+                        disabled={!canHire}
+                        style={{
+                          fontSize: 8,
+                          fontWeight: 700,
+                          fontFamily: 'monospace',
+                          padding: '1px 6px',
+                          borderRadius: 2,
+                          border: 'none',
+                          cursor: canHire ? 'pointer' : 'default',
+                          background: canHire ? '#4ADE80' : C.tileBorder,
+                          color: canHire ? '#1e1a16' : C.textDim,
+                        }}
+                      >
+                        Hire
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: 8, color: C.textDim, fontFamily: 'monospace' }}>#{i + 1}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {/* Next hire requirements */}
+            {workers < MAX_WORKERS && (() => {
+              const next = WORKER_TIERS[workers];
+              const reqs: string[] = [];
+              if (next.harvests > 0) reqs.push(`${totalHarvested}/${next.harvests} harvests`);
+              if (next.species > 0) reqs.push(`${speciesDiscovered}/${next.species} species`);
+              if (next.golden > 0) reqs.push(`${totalGolden}/${next.golden} golden`);
+              return (
+                <div style={{ marginTop: 6, fontSize: 9, color: C.textDim, fontFamily: 'monospace' }}>
+                  Hire: {reqs.join(' \u00B7 ')}
+                </div>
+              );
+            })()}
+
+            {/* Speed upgrade */}
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 9, color: C.textDim, fontFamily: 'monospace', fontWeight: 600, marginBottom: 4 }}>
+                SPEED &mdash; Lv.{workerSpeed}/{MAX_SPEED_LEVEL}
+                {' '}({SPEED_TIERS[workerSpeed - 1].intervalMin / 1000}-{SPEED_TIERS[workerSpeed - 1].intervalMax / 1000}s)
+              </div>
+              <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+                {SPEED_TIERS.map((_, i) => {
+                  const unlocked = i < workerSpeed;
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        width: 28,
+                        height: 6,
+                        borderRadius: 2,
+                        background: unlocked ? '#60A5FA' : C.empty,
+                        border: `1px solid ${unlocked ? '#60A5FA' : C.border}`,
+                      }}
+                    />
+                  );
+                })}
+                {workerSpeed < MAX_SPEED_LEVEL && (() => {
+                  const next = SPEED_TIERS[workerSpeed];
+                  const meetsHarvests = totalHarvested >= next.harvests;
+                  const meetsPests = (totalPestsRemoved ?? 0) >= next.pestsRemoved;
+                  const canUpgrade = meetsHarvests && meetsPests;
+                  return (
+                    <button
+                      onClick={canUpgrade ? onUpgradeSpeed : undefined}
+                      disabled={!canUpgrade}
+                      style={{
+                        fontSize: 8,
+                        fontWeight: 700,
+                        fontFamily: 'monospace',
+                        padding: '2px 8px',
+                        borderRadius: 2,
+                        border: 'none',
+                        cursor: canUpgrade ? 'pointer' : 'default',
+                        background: canUpgrade ? '#60A5FA' : C.tileBorder,
+                        color: canUpgrade ? '#1e1a16' : C.textDim,
+                        marginLeft: 4,
+                      }}
+                    >
+                      Upgrade
+                    </button>
+                  );
+                })()}
+              </div>
+              {workerSpeed < MAX_SPEED_LEVEL && (() => {
+                const next = SPEED_TIERS[workerSpeed];
+                const reqs: string[] = [];
+                if (next.harvests > 0) reqs.push(`${totalHarvested}/${next.harvests} harvests`);
+                if (next.pestsRemoved > 0) reqs.push(`${totalPestsRemoved ?? 0}/${next.pestsRemoved} pests`);
+                return (
+                  <div style={{ marginTop: 4, fontSize: 9, color: C.textDim, fontFamily: 'monospace' }}>
+                    Next: {reqs.join(' \u00B7 ')} &rarr; {next.intervalMin / 1000}-{next.intervalMax / 1000}s
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
