@@ -6,19 +6,21 @@ import type { FarmCell, AnimalInstance } from "../types/game";
 import { CROP_MAP } from "../data/crops";
 
 // ── Constants ───────────────────────────────────────────────────────
-const DUCK_SIZE = 40;
-const MOVE_SPEED = 2.5; // grid units per second
+const DUCK_SIZE = 28;
+const MOVE_SPEED = 1.2; // grid units per second
 const FLEE_SPEED_MULTIPLIER = 1.5;
-const WORK_DURATION = 1000;
+const WORK_DURATION = 2500;
+const REST_DURATION = 180_000; // 3 minutes rest after work streak
+const WORKS_BEFORE_REST_MIN = 3;
+const WORKS_BEFORE_REST_MAX = 4;
 const FLEE_TRIGGER_RADIUS = 2.5; // grid units
 const FLEE_DISTANCE = 3;
-const NO_TARGET_RETRY = 3000;
 const ROAM_IDLE_MIN = 1000;
 const ROAM_IDLE_MAX = 3000;
 const ROAM_DIST_MIN = 2;
 const ROAM_DIST_MAX = 4;
-const ANIMAL_EAT_CHANCE = 0.3; // chance of being eaten when roaming past animal fruit
-const DEATH_ANIM_DURATION = 800;
+const DEATH_ANIM_DURATION = 1500;
+const DEATH_FLOAT_HEIGHT = 60; // px to float upward
 
 // Grid bounds (HHKB layout)
 const GRID_COL_MIN = 0.5;
@@ -175,13 +177,38 @@ function findTarget(
   return targets[0];
 }
 
-/** Get a random roam destination within grid bounds. */
-function getRandomRoamTarget(duck: AnimalInstance): { col: number; row: number } {
+const WATER_ROAM_CHANCE = 0.6; // chance to roam toward a watering cell
+
+/** Get a random roam destination within grid bounds, biased toward watering cells. */
+function getRandomRoamTarget(
+  duck: AnimalInstance,
+  cells: Record<string, FarmCell>,
+): { col: number; row: number } {
+  // Try to roam toward a watering cell
+  if (Math.random() < WATER_ROAM_CHANCE) {
+    const waterCells: { col: number; row: number }[] = [];
+    for (const [keyCode, cell] of Object.entries(cells)) {
+      if (keyCode.startsWith("_gap")) continue;
+      if (cell.stage === "watering") {
+        waterCells.push({ col: cell.col + cell.width / 2, row: cell.row + 0.5 });
+      }
+    }
+    if (waterCells.length > 0) {
+      const target = waterCells[Math.floor(Math.random() * waterCells.length)];
+      // Add slight offset so ducks don't stack exactly on the cell
+      return {
+        col: clampCol(target.col + randomBetween(-0.5, 0.5)),
+        row: clampRow(target.row + randomBetween(-0.3, 0.3)),
+      };
+    }
+  }
+
+  // Fallback: random direction
   const angle = Math.random() * Math.PI * 2;
   const dist = randomBetween(ROAM_DIST_MIN, ROAM_DIST_MAX);
   return {
     col: clampCol(duck.col + Math.cos(angle) * dist),
-    row: clampRow(duck.row + Math.sin(angle) * dist * 0.5), // flatter movement for isometric
+    row: clampRow(duck.row + Math.sin(angle) * dist * 0.5),
   };
 }
 
@@ -209,27 +236,6 @@ export interface AnimalCallbacks {
   onDuckEaten: (duckId: string) => void;
 }
 
-/** Check if duck is near an animal-type fruit cell and might get eaten. */
-function checkAnimalDanger(
-  duck: AnimalInstance,
-  cells: Record<string, FarmCell>,
-): string | null {
-  // Check all fruit cells with animal category near the duck
-  for (const [keyCode, cell] of Object.entries(cells)) {
-    if (keyCode.startsWith("_gap")) continue;
-    if (cell.stage !== "fruit" || !cell.cropId) continue;
-    const crop = CROP_MAP[cell.cropId];
-    if (!crop || crop.category !== "animal") continue;
-
-    const cellCol = cell.col + cell.width / 2;
-    const cellRow = cell.row + 0.5;
-    const dist = Math.hypot(cellCol - duck.col, cellRow - duck.row);
-    if (dist < 0.8) {
-      return keyCode;
-    }
-  }
-  return null;
-}
 
 // ── Update single duck ──────────────────────────────────────────────
 function updateSingleDuck(
@@ -255,16 +261,10 @@ function updateSingleDuck(
     case "idle": {
       if (now < duck.nextActionTime) break;
 
-      // Check for nearby animal danger while idle
-      const dangerKey = checkAnimalDanger(duck, cells);
-      if (dangerKey && Math.random() < ANIMAL_EAT_CHANCE) {
-        duck.state = "dead";
-        duck.diedAt = now;
-        callbacks.onDuckEaten(duck.id);
-        break;
-      }
+      // Resting after work — roam only, no work targets
+      const isResting = now < duck.restUntil;
 
-      const target = findTarget(duck, animals, cells);
+      const target = isResting ? null : findTarget(duck, animals, cells);
       if (target) {
         const dist = Math.hypot(target.col - duck.col, target.row - duck.row);
         if (dist < 0.3) {
@@ -281,8 +281,8 @@ function updateSingleDuck(
         duck.state = "walking";
         startMoveTo(duck, target.col, target.row);
       } else {
-        // Roam randomly
-        const roamTarget = getRandomRoamTarget(duck);
+        // Roam — prefer watering cells
+        const roamTarget = getRandomRoamTarget(duck, cells);
         duck.targetKey = null;
         duck.actionType = null;
         duck.state = "walking";
@@ -301,25 +301,6 @@ function updateSingleDuck(
       if (t >= 1) {
         duck.col = duck.moveEndCol;
         duck.row = duck.moveEndRow;
-
-        // Check animal danger on arrival
-        const dangerKey = checkAnimalDanger(duck, cells);
-        if (dangerKey) {
-          // If we were walking toward a target that became animal fruit, definitely eaten
-          if (duck.targetKey && dangerKey === duck.targetKey) {
-            duck.state = "dead";
-            duck.diedAt = now;
-            callbacks.onDuckEaten(duck.id);
-            break;
-          }
-          // Random encounter while roaming
-          if (Math.random() < ANIMAL_EAT_CHANCE) {
-            duck.state = "dead";
-            duck.diedAt = now;
-            callbacks.onDuckEaten(duck.id);
-            break;
-          }
-        }
 
         if (duck.targetKey) {
           // Verify target is still valid
@@ -358,14 +339,6 @@ function updateSingleDuck(
               callbacks.onFertilize(duck.targetKey);
             } else if (duck.actionType === "harvest" &&
                        cell.stage === "fruit" && cell.cropId) {
-              const crop = CROP_MAP[cell.cropId];
-              if (crop && crop.category === "animal") {
-                // Arrived at what became animal fruit — eaten!
-                duck.state = "dead";
-                duck.diedAt = now;
-                callbacks.onDuckEaten(duck.id);
-                break;
-              }
               callbacks.onHarvest(duck.targetKey);
             }
           }
@@ -373,7 +346,13 @@ function updateSingleDuck(
         duck.state = "idle";
         duck.targetKey = null;
         duck.actionType = null;
-        duck.nextActionTime = now + randomBetween(NO_TARGET_RETRY, NO_TARGET_RETRY * 2);
+        duck.workCount += 1;
+        const restThreshold = Math.floor(randomBetween(WORKS_BEFORE_REST_MIN, WORKS_BEFORE_REST_MAX + 1));
+        if (duck.workCount >= restThreshold) {
+          duck.restUntil = now + REST_DURATION;
+          duck.workCount = 0;
+        }
+        duck.nextActionTime = now + randomBetween(ROAM_IDLE_MIN, ROAM_IDLE_MAX);
       }
       break;
     }
@@ -422,18 +401,26 @@ function renderSingleDuck(
 ): void {
   let entry = duckElements.get(duck.id);
 
-  // Handle dead ducks
+  // Handle dead ducks — float upward + fade out (ascending)
   if (duck.state === "dead") {
     if (entry) {
       if (duck.diedAt && now - duck.diedAt < DEATH_ANIM_DURATION) {
-        // Death animation: shrink + fade
         const progress = (now - duck.diedAt) / DEATH_ANIM_DURATION;
-        const scale = 1 - progress;
-        const opacity = 1 - progress;
+        // Ease out for smooth deceleration
+        const eased = 1 - Math.pow(1 - progress, 2);
+        const floatY = -eased * DEATH_FLOAT_HEIGHT;
+        // Fade to semi-transparent then fully transparent
+        const opacity = Math.max(0, 1 - progress * 1.2);
         const screen = gridToScreen(duck.col, duck.row, tileW, tileH, originX, originY, flipFactor);
-        entry.el.style.transform = `translate(${screen.x - DUCK_SIZE / 2}px, ${screen.y - 8 - DUCK_SIZE}px) scale(${scale})`;
+        const baseX = screen.x - DUCK_SIZE / 2;
+        const baseY = screen.y - 8 - DUCK_SIZE;
+        // Gentle sway while ascending
+        const sway = Math.sin(progress * Math.PI * 3) * 4;
+        entry.el.style.transform = `translate(${baseX + sway}px, ${baseY + floatY}px)`;
         entry.el.style.opacity = String(opacity);
+        entry.el.style.filter = `brightness(1.5) saturate(0.3)`;
       } else {
+        entry.el.style.filter = "";
         entry.el.remove();
         duckElements.delete(duck.id);
       }
@@ -523,6 +510,8 @@ export function createDuck(id: string, now: number): AnimalInstance {
     workStartTime: 0,
     diedAt: null,
     nextActionTime: 0,
+    restUntil: 0,
+    workCount: 0,
   };
 }
 
