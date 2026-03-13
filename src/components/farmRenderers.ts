@@ -8,16 +8,24 @@ import {
   type IsoBlock,
 } from '../utils/isometric';
 
+// ── Resolution scale factor ─────────────────────────────────────
+// Change this single value to scale all farm rendering.
+// 1.0 = base resolution (64×32 tiles), 1.25 = 25% larger, etc.
+export const SCALE = 1.25;
+
+/** Round a base pixel value by the global scale factor. */
+const s = (base: number) => Math.round(base * SCALE);
+
 // ── Shared tile constants ──────────────────────────────────────────
-export const TILE_W = 64;
-export const TILE_H = 32;
+export const TILE_W = s(64);
+export const TILE_H = s(32);
 
 // ── Internal constants ─────────────────────────────────────────────
 const LEFT_FACE_FACTOR = 0.55;
 const FRONT_FACE_FACTOR = 0.75;
 
-const HEATMAP_DEPTH_MIN = 6;
-const HEATMAP_DEPTH_MAX = 28;
+const HEATMAP_DEPTH_MIN = s(6);
+const HEATMAP_DEPTH_MAX = s(28);
 
 const STAGE_EMOJI: Record<FarmStage, string> = {
   empty: '',
@@ -95,7 +103,7 @@ export function drawHeatmapTile(
     ctx.save();
     ctx.translate(topCenter.x, topCenter.y - 4);
     ctx.transform(txNx / txLen, txNy * flipFactor / txLen, -txNx * flipFactor / txLen, txNy / txLen, 0, 0);
-    ctx.font = 'bold 10px sans-serif';
+    ctx.font = `bold ${s(10)}px sans-serif`;
     ctx.fillStyle = textColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -107,7 +115,7 @@ export function drawHeatmapTile(
     ctx.save();
     ctx.translate(topCenter.x, topCenter.y + 5);
     ctx.transform(txNx / txLen, txNy * flipFactor / txLen, -txNx * flipFactor / txLen, txNy / txLen, 0, 0);
-    ctx.font = '9px sans-serif';
+    ctx.font = `${s(9)}px sans-serif`;
     ctx.fillStyle = textColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -159,7 +167,8 @@ export function drawHitFlash(
 // ── Emoji pre-render cache (drawImage interpolates sub-pixel smoothly) ──
 
 const emojiCache = new Map<string, HTMLCanvasElement>();
-const EMOJI_SIZE = 40;
+const EMOJI_SIZE = s(40);
+const EMOJI_FONT = s(20);
 
 function getEmojiCanvas(emoji: string): HTMLCanvasElement {
   let canvas = emojiCache.get(emoji);
@@ -170,7 +179,7 @@ function getEmojiCanvas(emoji: string): HTMLCanvasElement {
   canvas.height = EMOJI_SIZE * dpr;
   const c = canvas.getContext('2d')!;
   c.scale(dpr, dpr);
-  c.font = '20px serif';
+  c.font = `${EMOJI_FONT}px serif`;
   c.textAlign = 'center';
   c.textBaseline = 'middle';
   c.fillText(emoji, EMOJI_SIZE / 2, EMOJI_SIZE / 2);
@@ -211,7 +220,7 @@ export function drawStageEmoji(
       EMOJI_SIZE, EMOJI_SIZE,
     );
   } else {
-    ctx.font = '20px serif';
+    ctx.font = `${EMOJI_FONT}px serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(emoji, topCenter.x, topCenter.y - 2);
@@ -274,7 +283,7 @@ export function drawGoldenEffect(
   ctx.save();
   ctx.shadowColor = '#FFD700';
   ctx.shadowBlur = 15;
-  ctx.font = '20px serif';
+  ctx.font = `${EMOJI_FONT}px serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(CROP_MAP[cell.cropId!]?.emoji || '', topCenter.x, topCenter.y - 2);
@@ -285,7 +294,7 @@ export function drawGoldenEffect(
     const radius = 12;
     const sx = topCenter.x + Math.cos(angle) * radius;
     const sy = topCenter.y + Math.sin(angle) * radius * 0.5 - 2;
-    ctx.font = '8px serif';
+    ctx.font = `${s(8)}px serif`;
     ctx.textAlign = 'center';
     ctx.fillText('\u2728', sx, sy);
   }
@@ -301,7 +310,7 @@ export function drawPestOverlay(
   now: number,
 ): void {
   const wiggle = Math.sin(now / 150) * 3;
-  ctx.font = '18px serif';
+  ctx.font = `${s(18)}px serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('\uD83D\uDC1B', topCenter.x + wiggle, topCenter.y - 2);
@@ -317,7 +326,7 @@ export function drawCountdownTimer(
 ): void {
   if (stage === 'overworked' && cell.overworkedUntil) {
     const remaining = Math.max(0, Math.ceil((cell.overworkedUntil - now) / 1000));
-    ctx.font = 'bold 10px sans-serif';
+    ctx.font = `bold ${s(10)}px sans-serif`;
     ctx.fillStyle = '#FFFFFF';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -328,7 +337,7 @@ export function drawCountdownTimer(
     const remainingSec = Math.max(0, Math.ceil((cell.fallowUntil - now) / 1000));
     const remainingMin = Math.floor(remainingSec / 60);
     const remainingS = remainingSec % 60;
-    ctx.font = 'bold 9px sans-serif';
+    ctx.font = `bold ${s(9)}px sans-serif`;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -346,11 +355,12 @@ export function drawKeyLabel(
   topCenter: { x: number; y: number },
 ): void {
   const { ctx, flipFactor, txNx, txNy, txLen } = dc;
+  const labelFont = `bold ${s(11)}px sans-serif`;
 
   ctx.save();
   ctx.translate(topCenter.x, topCenter.y + 6);
   ctx.transform(txNx / txLen, txNy * flipFactor / txLen, -txNx * flipFactor / txLen, txNy / txLen, 0, 0);
-  ctx.font = 'bold 11px sans-serif';
+  ctx.font = labelFont;
   ctx.fillStyle = darkenColor(color, 0.65);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -369,7 +379,7 @@ export function drawKeyLabel(
       ctx.beginPath();
       ctx.rect(-30, clipTop, 60, textH * progress);
       ctx.clip();
-      ctx.font = 'bold 11px sans-serif';
+      ctx.font = labelFont;
       ctx.fillStyle = darkenColor(color, 1.3);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -413,7 +423,7 @@ export function drawHarvestAnimation(
     const emojiY = center.y - 2 - ep * 45;
     const emojiScale = 1 + ep * 0.5;
     ctx.globalAlpha = ep < 0.6 ? 1 : 1 - ((ep - 0.6) / 0.4);
-    ctx.font = `${Math.round(20 * emojiScale)}px serif`;
+    ctx.font = `${Math.round(EMOJI_FONT * emojiScale)}px serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(harvestEmoji, center.x, emojiY);
@@ -479,6 +489,61 @@ export function drawHarvestAnimation(
   ctx.restore();
 }
 
+/** Draw the fertilize animation: green glow + upward sparkle. */
+export function drawFertilizeAnimation(
+  ctx: CanvasRenderingContext2D,
+  block: IsoBlock,
+  fertilizeAge: number,
+  fertilizeDuration: number,
+  fertilizeTime: number,
+): void {
+  const progress = fertilizeAge / fertilizeDuration;
+  const center = polygonCentroid(block.top);
+
+  ctx.save();
+
+  // Green glow on block
+  if (progress < 0.4) {
+    const flashAlpha = 0.5 * (1 - progress / 0.4);
+    const flashColor = `rgba(74, 222, 128, ${flashAlpha})`;
+    fillPoly(ctx, block.top, flashColor, false);
+    fillPoly(ctx, block.right, flashColor, false);
+    fillPoly(ctx, block.front, flashColor, false);
+  }
+
+  // Rising arrow/sparkle
+  if (progress < 0.7) {
+    const ep = progress / 0.7;
+    const arrowY = center.y - 2 - ep * 35;
+    ctx.globalAlpha = 1 - ep;
+    ctx.font = `${Math.round(s(16) * (1 + ep * 0.3))}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('\u2728', center.x, arrowY);
+    ctx.globalAlpha = 1;
+  }
+
+  // Green particles rising
+  if (progress > 0.05 && progress < 0.8) {
+    const bp = (progress - 0.05) / 0.75;
+    ctx.globalAlpha = (1 - bp) * 0.8;
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI * 2 * i) / 6 + ((fertilizeTime % 628) / 100);
+      const speed = 20 + ((fertilizeTime * (i + 3)) % 12);
+      const px = center.x + Math.cos(angle) * speed * bp;
+      const py = center.y + Math.sin(angle) * speed * bp * 0.5 - bp * 20;
+      const size = 2.5 * (1 - bp * 0.7);
+      ctx.fillStyle = '#4ADE80';
+      ctx.beginPath();
+      ctx.arc(px, py, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.restore();
+}
+
 /** Draw the pest-removal animation: bug floating away + green particles. */
 export function drawPestRemovalAnimation(
   ctx: CanvasRenderingContext2D,
@@ -505,7 +570,7 @@ export function drawPestRemovalAnimation(
     const bugY = center.y - 2 - ep * 40;
     const bugX = center.x + Math.sin(ep * Math.PI * 3) * 8;
     ctx.globalAlpha = 1 - ep;
-    ctx.font = `${Math.round(18 * (1 - ep * 0.5))}px serif`;
+    ctx.font = `${Math.round(s(18) * (1 - ep * 0.5))}px serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('\uD83D\uDC1B', bugX, bugY);

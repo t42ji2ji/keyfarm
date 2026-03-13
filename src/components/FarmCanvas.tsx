@@ -27,6 +27,7 @@ import {
   drawKeyLabel,
   drawHarvestAnimation,
   drawPestRemovalAnimation,
+  drawFertilizeAnimation,
 } from './farmRenderers';
 import {
   updateFarmer,
@@ -304,6 +305,17 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
 
         if (isPestRemoving && pestRemovalTime) {
           drawPestRemovalAnimation(ctx, block, pestRemovalAge, HARVEST_DURATION, pestRemovalTime);
+        }
+
+        const fertilizeTime = animations.recentFertilizes.get(keyDef.keyCode);
+        const fertilizeAge = fertilizeTime ? now - fertilizeTime : Infinity;
+        const isFertilizing = fertilizeAge < HARVEST_DURATION;
+        if (isFertilizing) hasActiveAnimations = true;
+        if (fertilizeTime && fertilizeAge > HARVEST_DURATION) {
+          animations.recentFertilizes.delete(keyDef.keyCode);
+        }
+        if (isFertilizing && fertilizeTime) {
+          drawFertilizeAnimation(ctx, block, fertilizeAge, HARVEST_DURATION, fertilizeTime);
         }
 
         colOffset += keyDef.width;
