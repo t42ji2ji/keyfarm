@@ -115,6 +115,20 @@ function parseState(raw: unknown): GameState {
       }
     }
 
+    // Reconcile saved cells with current layout (handles platform differences)
+    const layoutCells = createInitialCells();
+    for (const [key, layoutCell] of Object.entries(layoutCells)) {
+      if (!(key in cells)) {
+        cells[key] = layoutCell;
+      }
+    }
+    // Remove cells that no longer exist in the current layout
+    for (const key of Object.keys(cells)) {
+      if (!(key in layoutCells)) {
+        delete cells[key];
+      }
+    }
+
     // Migrate harvestsByFruit -> harvestsByCrop
     const harvestsByCrop = (parsed.harvestsByCrop as Record<string, number>)
       ?? (parsed.harvestsByFruit as Record<string, number>)
