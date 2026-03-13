@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react';
-import type { GameState, FarmStage } from '../types/game';
+import type { GameState, FarmStage, AnimalInstance } from '../types/game';
 import { HHKB_ROWS } from '../data/hhkbLayout';
 import type { AnimationState } from '../hooks/useGameState';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -12,6 +12,7 @@ import {
   type IsoBlock,
 } from '../utils/isometric';
 import {
+  SCALE,
   TILE_W,
   TILE_H,
   type DrawContext,
@@ -28,28 +29,35 @@ import {
   drawPestRemovalAnimation,
 } from './farmRenderers';
 import {
-  trySpawnCharacter,
-  updateCharacters,
-  renderCharacters,
-  cleanupCharacters,
+  updateFarmer,
+  renderFarmer,
+  cleanupFarmer,
 } from './roamingCharacters';
+import {
+  updateDucks,
+  renderDucks,
+  cleanupDucks,
+  setMouseGridPosition,
+} from './animalCharacters';
 
 const PADDING = 16;
 const HIT_FLASH_DURATION = 200;
 const HARVEST_DURATION = 1200;
 const FLIP_ANIM_DURATION = 400;
 
+const sd = (base: number) => Math.round(base * SCALE);
+
 const STAGE_DEPTH: Record<FarmStage, number> = {
-  empty: 8,
-  watering: 12,
-  sprout: 16,
-  tree: 22,
-  fruit: 26,
-  fallow: 6,
-  overworked: 10,
+  empty: sd(8),
+  watering: sd(12),
+  sprout: sd(16),
+  tree: sd(22),
+  fruit: sd(26),
+  fallow: sd(6),
+  overworked: sd(10),
 };
 
-const MAX_DEPTH = 26;
+const MAX_DEPTH = sd(26);
 
 const STAGE_COLORS: Record<FarmStage, string> = {
   empty: '#8B7355',
@@ -87,17 +95,37 @@ function canvasCoords(e: React.MouseEvent<HTMLCanvasElement>, canvas: HTMLCanvas
   };
 }
 
+/** Convert screen coordinates back to approximate grid position. */
+function screenToGrid(
+  screenX: number,
+  screenY: number,
+  tileW: number,
+  tileH: number,
+  originX: number,
+  originY: number,
+  flipFactor: number,
+): { col: number; row: number } {
+  const sx = (screenX - originX) / (tileW / 2 * flipFactor);
+  const sy = (screenY - originY) / (tileH / 2);
+  const col = (sx + sy) / 2;
+  const row = (sy - sx) / 2;
+  return { col, row };
+}
+
 interface FarmCanvasProps {
   gameState: GameState;
   animations: AnimationState;
   onHarvest: (keyCode: string) => void;
   onRemovePest: (keyCode: string) => void;
+  onFertilize: (keyCode: string) => void;
+  onDuckEaten: (duckId: string) => void;
+  onAnimalsUpdated: (animals: AnimalInstance[]) => void;
   onDragStart?: () => void;
   viewMode: 'farm' | 'heatmap';
   flipX: boolean;
 }
 
-export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onDragStart, viewMode, flipX }: FarmCanvasProps) {
+export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onFertilize, onDuckEaten, onAnimalsUpdated, onDragStart, viewMode, flipX }: FarmCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const cellBlocksRef = useRef<Map<string, IsoBlock>>(new Map());
@@ -106,7 +134,10 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onD
   gameStateRef.current = gameState;
 
   useEffect(() => {
-    return () => cleanupCharacters();
+    return () => {
+      cleanupFarmer();
+      cleanupDucks();
+    };
   }, []);
 
   const canvasWidth = CANVAS_WIDTH;
@@ -279,18 +310,34 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onD
       });
     });
 
-    // ── Roaming characters ──
-    trySpawnCharacter(now);
-    updateCharacters(now);
+    // ── Farmer character ──
+    updateFarmer(now, gameStateRef.current.cells, {
+      onHarvest: (keyCode: string) => onHarvest(keyCode),
+      onRemovePest: (keyCode: string) => onRemovePest(keyCode),
+    }, gameStateRef.current.workers, gameStateRef.current.workerSpeed);
     if (overlayRef.current) {
-      renderCharacters(overlayRef.current, originX, originY, flipFactor, TILE_W, TILE_H, now);
+      renderFarmer(overlayRef.current, originX, originY, flipFactor, TILE_W, TILE_H);
     }
-    hasActiveAnimations = true; // Keep loop alive for character spawn checks
+    // ── Duck characters ──
+    updateDucks(now, gameStateRef.current.animals, gameStateRef.current.cells, {
+      onHarvest: (keyCode: string) => onHarvest(keyCode),
+      onFertilize: (keyCode: string) => onFertilize(keyCode),
+      onDuckEaten: (duckId: string) => onDuckEaten(duckId),
+    });
+    if (overlayRef.current) {
+      renderDucks(
+        gameStateRef.current.animals,
+        overlayRef.current,
+        originX, originY, flipFactor, TILE_W, TILE_H,
+      );
+    }
+
+    hasActiveAnimations = true; // Keep loop alive for farmer + ducks
 
     if (hasActiveAnimations) {
       rafRef.current = requestAnimationFrame(draw);
     }
-  }, [animations, viewMode]);
+  }, [animations, viewMode, onHarvest, onRemovePest, onFertilize, onDuckEaten]);
 
   // Kick off flip animation when flipX changes
   useEffect(() => {
@@ -321,6 +368,12 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onD
     if (!canvas) return;
     if (viewModeRef.current === 'heatmap') { canvas.style.cursor = 'default'; return; }
     const { x, y } = canvasCoords(e, canvas, canvasWidth, canvasHeight);
+
+    // Update mouse grid position for duck flee behavior
+    const t = (1 - flipFactorRef.current) / 2;
+    const interpOriginX = _boundsNormal.originX * (1 - t) + _boundsFlipped.originX * t;
+    const gridPos = screenToGrid(x, y, TILE_W, TILE_H, interpOriginX, _boundsNormal.originY, flipFactorRef.current);
+    setMouseGridPosition(gridPos.col, gridPos.row);
 
     let overFruit = false;
     for (const [keyCode, block] of cellBlocksRef.current.entries()) {
