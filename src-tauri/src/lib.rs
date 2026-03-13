@@ -331,6 +331,7 @@ mod win_keyboard {
             0x08 => Some("Delete".into()),
             0x09 => Some("Tab".into()),
             0x1B => Some("Escape".into()),
+            0x14 => Some("CapsLock".into()),
             0xA0 => Some("ShiftLeft".into()),
             0xA1 => Some("ShiftRight".into()),
             0xA2 => Some("ControlLeft".into()),

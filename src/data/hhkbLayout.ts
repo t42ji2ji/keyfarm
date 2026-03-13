@@ -6,6 +6,8 @@ import type { FarmCell } from '../types/game';
 // Row 2: Ctrl A S D F G H J K L ; ' Return (13 keys, Ctrl=1.75w, Return=2.25w)
 // Row 3: Shift Z X C V B N M , . / Shift Fn (13 keys, LShift=2.25w, RShift=1.75w)
 
+const IS_WINDOWS = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
+
 interface KeyDef {
   keyCode: string;
   label: string;
@@ -48,7 +50,9 @@ const ROW_1: KeyDef[] = [
 ];
 
 const ROW_2: KeyDef[] = [
-  { keyCode: 'ControlLeft', label: 'Ctrl', width: 1.75 },
+  IS_WINDOWS
+    ? { keyCode: 'CapsLock', label: 'Caps', width: 1.75 }
+    : { keyCode: 'ControlLeft', label: 'Ctrl', width: 1.75 },
   { keyCode: 'KeyA', label: 'A', width: 1 },
   { keyCode: 'KeyS', label: 'S', width: 1 },
   { keyCode: 'KeyD', label: 'D', width: 1 },
@@ -76,16 +80,22 @@ const ROW_3: KeyDef[] = [
   { keyCode: 'Dot', label: '.', width: 1 },
   { keyCode: 'Slash', label: '/', width: 1 },
   { keyCode: 'ShiftRight', label: 'Shift', width: 1.75 },
-  { keyCode: 'Function', label: 'Fn', width: 1 },
+  IS_WINDOWS
+    ? { keyCode: 'MetaLeft', label: 'Win', width: 1 }
+    : { keyCode: 'Function', label: 'Fn', width: 1 },
 ];
 
-// HHKB bottom row: spacers + Alt Cmd Space Cmd Alt
+// HHKB bottom row: spacers + Alt Cmd/Ctrl Space Cmd/Ctrl Alt
 const ROW_4: KeyDef[] = [
   { keyCode: '_gap_l', label: '', width: 2 },
   { keyCode: 'AltLeft', label: 'Alt', width: 1 },
-  { keyCode: 'MetaLeft', label: 'Cmd', width: 1.5 },
+  IS_WINDOWS
+    ? { keyCode: 'ControlLeft', label: 'Ctrl', width: 1.5 }
+    : { keyCode: 'MetaLeft', label: 'Cmd', width: 1.5 },
   { keyCode: 'Space', label: 'Space', width: 6 },
-  { keyCode: 'MetaRight', label: 'Cmd', width: 1.5 },
+  IS_WINDOWS
+    ? { keyCode: 'ControlRight', label: 'Ctrl', width: 1.5 }
+    : { keyCode: 'MetaRight', label: 'Cmd', width: 1.5 },
   { keyCode: 'AltRight', label: 'Alt', width: 1 },
   { keyCode: '_gap_r', label: '', width: 2 },
 ];

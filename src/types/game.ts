@@ -165,7 +165,7 @@ export const GOLDEN_CHANCE = 0.01;
 
 export const DUCK_SPAWN_TIERS: { harvests: number; cap: number }[] = [
   { harvests: 0, cap: 0 },
-  { harvests: 100, cap: 1 },
+  { harvests: 3, cap: 1 },
   { harvests: 500, cap: 2 },
   { harvests: 1500, cap: 3 },
   { harvests: 3000, cap: 4 },
