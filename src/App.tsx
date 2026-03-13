@@ -29,7 +29,7 @@ function PermissionScreen() {
 }
 
 function App() {
-  const { gameState, harvest, removePest, animations } = useGameState();
+  const { gameState, harvest, removePest, hireWorker, upgradeWorkerSpeed, fertilize, updateAnimals, animations } = useGameState();
   const [scale, setScale] = useState(1);
   const [showStats, setShowStats] = useState(false);
   const [viewMode, setViewMode] = useState<'farm' | 'heatmap'>('farm');
@@ -127,6 +127,14 @@ function App() {
     setIsDragging(true);
   }, []);
 
+  const handleDuckEaten = useCallback((duckId: string) => {
+    const now = Date.now();
+    const updatedAnimals = gameState.animals.map(a =>
+      a.id === duckId ? { ...a, state: 'dead' as const, diedAt: now } : a
+    );
+    updateAnimals(updatedAnimals);
+  }, [gameState.animals, updateAnimals]);
+
   const handleResizeGrip = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -143,10 +151,10 @@ function App() {
         className="canvas-scaler"
         style={{ transform: `scale(${scale})` }}
       >
-        <FarmCanvas gameState={gameState} animations={animations} onHarvest={harvest} onRemovePest={removePest} onDragStart={handleDragStart} viewMode={viewMode} flipX={isoFlipped} />
+        <FarmCanvas gameState={gameState} animations={animations} onHarvest={harvest} onRemovePest={removePest} onFertilize={fertilize} onDuckEaten={handleDuckEaten} onAnimalsUpdated={updateAnimals} onDragStart={handleDragStart} viewMode={viewMode} flipX={isoFlipped} />
       </div>
       {showStats && (
-        <StatsPanel gameState={gameState} onClose={() => setShowStats(false)} />
+        <StatsPanel gameState={gameState} onClose={() => setShowStats(false)} onHireWorker={hireWorker} onUpgradeSpeed={upgradeWorkerSpeed} />
       )}
       <div className="resize-grip" onMouseDown={handleResizeGrip}>
         <svg width="12" height="12" viewBox="0 0 12 12">
