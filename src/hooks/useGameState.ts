@@ -23,9 +23,12 @@ import {
   DUCK_SPAWN_TIERS,
   DUCK_SPAWN_INTERVAL,
   DUCK_RESPAWN_DELAY,
+  CAT_SPAWN_TIERS,
+  CAT_SPAWN_INTERVAL,
 } from '../types/game';
 import { createDuck } from '../components/animalCharacters';
 import { createDog } from '../components/dogCharacter';
+import { createCat } from '../components/catCharacter';
 import { getRandomCrop } from '../data/crops';
 import { createInitialCells } from '../data/hhkbLayout';
 
@@ -490,6 +493,42 @@ export function useGameState() {
     return () => clearTimeout(timeout);
   }, []);
 
+  // --- Cat spawning timer ---
+  useEffect(() => {
+    let timeout: number;
+    let nextCatId = 0;
+
+    const scheduleCatSpawn = () => {
+      const delay = randomBetween(CAT_SPAWN_INTERVAL[0], CAT_SPAWN_INTERVAL[1]);
+      timeout = window.setTimeout(() => {
+        const now = Date.now();
+        setGameState((prev) => {
+          let cap = 0;
+          for (const tier of CAT_SPAWN_TIERS) {
+            if (prev.totalHarvested >= tier.harvests) cap = tier.cap;
+          }
+
+          const aliveCats = prev.animals.filter(
+            a => a.animalId === 'cat' && a.state !== 'dead'
+          );
+
+          if (aliveCats.length < cap) {
+            const id = `cat-${Date.now()}-${nextCatId++}`;
+            const newCat = createCat(id, now);
+            scheduleCatSpawn();
+            return { ...prev, animals: [...prev.animals, newCat] };
+          }
+
+          scheduleCatSpawn();
+          return prev;
+        });
+      }, delay);
+    };
+
+    scheduleCatSpawn();
+    return () => clearTimeout(timeout);
+  }, []);
+
   const harvest = useCallback((keyCode: string) => {
     // Capture crop info before state resets it
     const cell = stateRef.current.cells[keyCode];
@@ -632,6 +671,53 @@ export function useGameState() {
     }));
   }, []);
 
+  const waterToFish = useCallback((keyCode: string) => {
+    animRef.current.harvestFruits.set(keyCode, 'fish');
+    animRef.current.harvestGolden.set(keyCode, false);
+    animRef.current.recentHarvests.set(keyCode, Date.now());
+    setGameState((prev) => {
+      const c = prev.cells[keyCode];
+      if (!c || c.stage !== 'watering') return prev;
+
+      return {
+        ...prev,
+        cells: {
+          ...prev.cells,
+          [keyCode]: {
+            ...c,
+            stage: 'fruit' as FarmStage,
+            hitCount: 0,
+            cropId: 'fish',
+            isGolden: false,
+          },
+        },
+      };
+    });
+  }, []);
+
+  const dogScared = useCallback((dogId: string, fleeCol: number, fleeRow: number) => {
+    const now = Date.now();
+    setGameState((prev) => ({
+      ...prev,
+      animals: prev.animals.map(a => {
+        if (a.id !== dogId) return a;
+        const dist = Math.hypot(fleeCol - a.col, fleeRow - a.row);
+        return {
+          ...a,
+          state: 'fleeing' as const,
+          moveStartCol: a.col,
+          moveStartRow: a.row,
+          moveEndCol: fleeCol,
+          moveEndRow: fleeRow,
+          facingLeft: fleeCol < a.col,
+          moveDuration: (dist / 3.0) * 1000, // flee at chase speed
+          moveStartTime: now,
+          nextActionTime: now + 5000, // stay idle for 5s after fleeing
+        };
+      }),
+    }));
+  }, []);
+
   const updateAnimals = useCallback((animals: AnimalInstance[]) => {
     setGameState((prev) => ({ ...prev, animals }));
   }, []);
@@ -679,5 +765,5 @@ export function useGameState() {
     });
   }, []);
 
-  return { gameState, harvest, removePest, hireWorker, upgradeWorkerSpeed, fertilize, updateAnimals, duckAttacked, animations: animRef.current };
+  return { gameState, harvest, removePest, hireWorker, upgradeWorkerSpeed, fertilize, updateAnimals, duckAttacked, waterToFish, dogScared, animations: animRef.current };
 }

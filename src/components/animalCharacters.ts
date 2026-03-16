@@ -143,8 +143,8 @@ function findTarget(
     const row = cell.row + 0.5;
     const dist = Math.hypot(col - duck.col, row - duck.row);
 
-    // Fertilize targets: growing stages
-    if (cell.stage === "watering" || cell.stage === "sprout" || cell.stage === "tree") {
+    // Fertilize targets: growing stages (skip watering — ducks don't fertilize water)
+    if (cell.stage === "sprout" || cell.stage === "tree") {
       targets.push({
         keyCode, col, row,
         type: "fertilize",
@@ -307,7 +307,7 @@ function updateSingleDuck(
           const cell = cells[duck.targetKey];
           if (cell) {
             const isValidFertilize = duck.actionType === "fertilize" &&
-              ["watering", "sprout", "tree"].includes(cell.stage) && !cell.hasPest;
+              ["sprout", "tree"].includes(cell.stage) && !cell.hasPest;
             const isValidHarvest = duck.actionType === "harvest" &&
               cell.stage === "fruit" && cell.cropId &&
               CROP_MAP[cell.cropId]?.category !== "animal";
@@ -335,7 +335,7 @@ function updateSingleDuck(
           const cell = cells[duck.targetKey];
           if (cell) {
             if (duck.actionType === "fertilize" &&
-                ["watering", "sprout", "tree"].includes(cell.stage) && !cell.hasPest) {
+                ["sprout", "tree"].includes(cell.stage) && !cell.hasPest) {
               callbacks.onFertilize(duck.targetKey);
             } else if (duck.actionType === "harvest" &&
                        cell.stage === "fruit" && cell.cropId) {

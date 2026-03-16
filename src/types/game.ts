@@ -127,7 +127,7 @@ export const MAX_SPEED_LEVEL = SPEED_TIERS.length;
 
 export const STAGE_THRESHOLDS: Record<string, number> = {
   empty: 5,
-  watering: 12,
+  watering: 18,
   sprout: 23,
   tree: 38,
   fruit: 0,
@@ -174,3 +174,10 @@ export const DUCK_SPAWN_TIERS: { harvests: number; cap: number }[] = [
 
 export const DUCK_SPAWN_INTERVAL: [number, number] = [60_000, 90_000]; // ms
 export const DUCK_RESPAWN_DELAY: [number, number] = [120_000, 180_000]; // ms
+
+export const CAT_SPAWN_TIERS: { harvests: number; cap: number }[] = [
+  { harvests: 0, cap: 0 },
+  { harvests: 5, cap: 1 },
+];
+
+export const CAT_SPAWN_INTERVAL: [number, number] = [90_000, 120_000]; // ms

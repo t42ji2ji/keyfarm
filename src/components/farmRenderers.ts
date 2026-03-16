@@ -279,28 +279,136 @@ export function drawGoldenEffect(
   topCenter: { x: number; y: number },
 ): void {
   const { ctx, now } = dc;
+  const pulse = 0.5 + 0.5 * Math.sin(now / 500 * Math.PI * 2);
+  const top = block.top;
 
+  // ── Ground glow: multiple layered shadow passes for intense radiance ──
+  for (let pass = 0; pass < 3; pass++) {
+    ctx.save();
+    ctx.shadowColor = '#FFD700';
+    ctx.shadowBlur = 25 + pass * 12 + pulse * 15;
+    ctx.beginPath();
+    ctx.moveTo(top[0].x, top[0].y);
+    for (let i = 1; i < top.length; i++) ctx.lineTo(top[i].x, top[i].y);
+    ctx.closePath();
+    ctx.fillStyle = pass === 0
+      ? `rgba(255, 215, 0, ${0.15 + 0.1 * pulse})`
+      : 'rgba(0,0,0,0)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ── Bright golden fill on all faces (the ground itself glows) ──
+  const baseAlpha = 0.35 + 0.2 * Math.sin(now / 300);
+  fillPoly(ctx, block.top, `rgba(255, 225, 50, ${baseAlpha})`, false);
+  fillPoly(ctx, block.right, `rgba(255, 190, 0, ${baseAlpha * 0.7})`, false);
+  fillPoly(ctx, block.front, `rgba(255, 210, 20, ${baseAlpha * 0.85})`, false);
+
+  // Second shimmer layer for extra intensity
+  const shimmer2 = 0.15 + 0.12 * Math.sin(now / 200 + 1);
+  fillPoly(ctx, block.top, `rgba(255, 255, 180, ${shimmer2})`, false);
+
+  // ── Bold golden border on ALL faces ──
+  const borderAlpha = 0.7 + 0.3 * pulse;
+  const borderColor = `rgba(255, 215, 0, ${borderAlpha})`;
+  // Top face border
+  ctx.save();
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 2.5;
+  ctx.shadowColor = '#FFD700';
+  ctx.shadowBlur = 6;
+  ctx.beginPath();
+  ctx.moveTo(top[0].x, top[0].y);
+  for (let i = 1; i < top.length; i++) ctx.lineTo(top[i].x, top[i].y);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+  // Right face border
+  ctx.save();
+  ctx.strokeStyle = `rgba(255, 200, 0, ${borderAlpha * 0.8})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(block.right[0].x, block.right[0].y);
+  for (let i = 1; i < block.right.length; i++) ctx.lineTo(block.right[i].x, block.right[i].y);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+  // Front face border
+  ctx.save();
+  ctx.strokeStyle = `rgba(255, 210, 0, ${borderAlpha * 0.9})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(block.front[0].x, block.front[0].y);
+  for (let i = 1; i < block.front.length; i++) ctx.lineTo(block.front[i].x, block.front[i].y);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+
+  // ── Light rays radiating from center ──
+  ctx.save();
+  ctx.globalAlpha = 0.18 + 0.12 * pulse;
+  for (let i = 0; i < 8; i++) {
+    const angle = (now / 2000) * Math.PI * 2 + (Math.PI * 2 * i) / 8;
+    const len = 30 + pulse * 10;
+    const x2 = topCenter.x + Math.cos(angle) * len;
+    const y2 = topCenter.y + Math.sin(angle) * len * 0.5;
+    ctx.strokeStyle = '#FFD700';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(topCenter.x, topCenter.y - 2);
+    ctx.lineTo(x2, y2 - 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // ── Emoji with strong golden glow ──
   ctx.save();
   ctx.shadowColor = '#FFD700';
-  ctx.shadowBlur = 15;
+  ctx.shadowBlur = 25;
   ctx.font = `${EMOJI_FONT}px serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(CROP_MAP[cell.cropId!]?.emoji || '', topCenter.x, topCenter.y - 2);
   ctx.restore();
 
-  for (let i = 0; i < 3; i++) {
-    const angle = (now / 800) + (Math.PI * 2 * i) / 3;
-    const radius = 12;
+  // ── Crown above the crop ──
+  ctx.save();
+  const crownY = topCenter.y - 18 + Math.sin(now / 600) * 2;
+  ctx.font = `${s(10)}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#FFD700';
+  ctx.shadowBlur = 10;
+  ctx.fillText('\uD83D\uDC51', topCenter.x, crownY);
+  ctx.restore();
+
+  // ── Orbiting sparkles (6 sparkles) ──
+  for (let i = 0; i < 6; i++) {
+    const angle = (now / 1000) + (Math.PI * 2 * i) / 6;
+    const radius = 16 + Math.sin(now / 400 + i) * 3;
     const sx = topCenter.x + Math.cos(angle) * radius;
     const sy = topCenter.y + Math.sin(angle) * radius * 0.5 - 2;
+    const sparkleAlpha = 0.6 + 0.4 * Math.sin(now / 300 + i * 1.2);
+    ctx.save();
+    ctx.globalAlpha = sparkleAlpha;
     ctx.font = `${s(8)}px serif`;
     ctx.textAlign = 'center';
     ctx.fillText('\u2728', sx, sy);
+    ctx.restore();
   }
 
-  const shimmerAlpha = 0.15 + 0.1 * Math.sin(now / 300);
-  fillPoly(ctx, block.top, `rgba(255, 215, 0, ${shimmerAlpha})`, false);
+  // ── Rising golden particles ──
+  for (let i = 0; i < 5; i++) {
+    const phase = ((now / 1200) + i * 0.2) % 1;
+    const px = topCenter.x + Math.sin(now / 700 + i * 2) * 10;
+    const py = topCenter.y - 2 - phase * 30;
+    const pAlpha = phase < 0.7 ? 0.8 : (1 - phase) / 0.3 * 0.8;
+    const pSize = 2 * (1 - phase * 0.5);
+    ctx.fillStyle = `rgba(255, 215, 0, ${pAlpha})`;
+    ctx.beginPath();
+    ctx.arc(px, py, pSize, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 /** Draw a wiggling bug emoji on a pest-infested tile. */
@@ -368,7 +476,7 @@ export function drawKeyLabel(
   ctx.restore();
 
   if (cell && stage !== 'fruit' && stage !== 'empty' && stage !== 'fallow' && stage !== 'overworked') {
-    const threshold = { watering: 12, sprout: 23, tree: 38 }[stage] || 1;
+    const threshold = { watering: 18, sprout: 23, tree: 38 }[stage] || 1;
     const progress = cell.hitCount / threshold;
     if (progress > 0) {
       ctx.save();
