@@ -7,10 +7,18 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import './App.css';
 
-function PermissionScreen() {
+function PermissionScreen({ isLinux, onRetry }: { isLinux: boolean; onRetry: () => Promise<boolean> }) {
   const handleOpen = useCallback(() => {
     invoke('request_accessibility');
   }, []);
+
+  const handleClick = useCallback(() => {
+    if (isLinux) {
+      void onRetry();
+      return;
+    }
+    handleOpen();
+  }, [handleOpen, isLinux, onRetry]);
 
   return (
     <div className="permission-screen" data-tauri-drag-region>
@@ -18,11 +26,15 @@ function PermissionScreen() {
         <div className="permission-icon">⌨️</div>
         <h1>Keyboard Access</h1>
         <p>
-          KeyFarm needs <strong>Accessibility</strong> permission to detect
-          keystrokes and grow your farm.
+          KeyFarm needs access to your keyboard to detect keystrokes and grow
+          your farm.
         </p>
-        <button onClick={handleOpen}>Open System Settings</button>
-        <span className="permission-hint">Waiting for permission…</span>
+        <button onClick={handleClick}>
+          {isLinux ? 'Retry' : 'Open System Settings'}
+        </button>
+        <span className="permission-hint">
+          {isLinux ? 'Waiting for keyboard access…' : 'Waiting for permission…'}
+        </span>
       </div>
     </div>
   );
@@ -36,33 +48,37 @@ function App() {
   const [isoFlipped, setIsoFlipped] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
+  const isLinux = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('linux');
 
   const resizeTimerRef = useRef<number>(0);
+
+  const refreshAccess = useCallback(async () => {
+    const granted = await invoke<boolean>('check_accessibility');
+    if (granted) {
+      setPermissionGranted(true);
+      invoke('start_listener');
+    } else {
+      setPermissionGranted(false);
+    }
+    return granted;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     let timer: number;
     const check = async () => {
-      const granted = await invoke<boolean>('check_accessibility');
-      if (cancelled) return;
-      if (granted) {
-        setPermissionGranted(true);
-        invoke('start_listener');
-      } else {
-        setPermissionGranted(false);
-        timer = window.setInterval(async () => {
-          const ok = await invoke<boolean>('check_accessibility');
-          if (ok && !cancelled) {
-            setPermissionGranted(true);
-            invoke('start_listener');
-            clearInterval(timer);
-          }
-        }, 1500);
-      }
+      const granted = await refreshAccess();
+      if (cancelled || granted) return;
+      timer = window.setInterval(async () => {
+        const ok = await refreshAccess();
+        if (ok && !cancelled) {
+          clearInterval(timer);
+        }
+      }, 1500);
     };
     check();
     return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+  }, [refreshAccess]);
 
   useEffect(() => {
     let mounted = false;
@@ -143,7 +159,7 @@ function App() {
   }, []);
 
   if (permissionGranted === null) return null;
-  if (!permissionGranted) return <PermissionScreen />;
+  if (!permissionGranted) return <PermissionScreen isLinux={isLinux} onRetry={refreshAccess} />;
 
   return (
     <div className={`app-container${isDragging ? ' is-dragging' : ''}`}>

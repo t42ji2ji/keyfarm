@@ -29,10 +29,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "nsis"],
+    "targets": ["dmg", "nsis", "deb", "appimage"],
     "macOS": {
       "minimumSystemVersion": "13.0"
     },
+    "linux": {},
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico"
