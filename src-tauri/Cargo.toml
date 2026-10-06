@@ -29,3 +29,7 @@ tauri-plugin-store = "2.4.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
 core-foundation = "0.10"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = "0.13"
+x11rb = { version = "0.13.2", features = ["xinput"] }

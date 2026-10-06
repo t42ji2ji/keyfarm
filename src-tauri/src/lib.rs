@@ -398,6 +398,344 @@ mod win_keyboard {
 }
 
 // =============================================================================
+// Linux keyboard listener (evdev via kbd-evdev)
+// =============================================================================
+
+#[cfg(target_os = "linux")]
+mod linux_keyboard {
+    use super::KeyPressEvent;
+    use evdev::{self, Device as EvdevDevice, EventSummary};
+    use std::io;
+    use std::path::PathBuf;
+    use std::sync::mpsc;
+    use std::thread;
+    use tauri::Emitter;
+
+    /// Map Linux KEY_* codes to key name strings (matching HHKB layout in src/data/hhkbLayout.ts)
+    fn evdev_key_to_string(code: u16) -> Option<String> {
+        match code {
+            // Row 0
+            1 => Some("Escape".into()),
+            2 => Some("Num1".into()),
+            3 => Some("Num2".into()),
+            4 => Some("Num3".into()),
+            5 => Some("Num4".into()),
+            6 => Some("Num5".into()),
+            7 => Some("Num6".into()),
+            8 => Some("Num7".into()),
+            9 => Some("Num8".into()),
+            10 => Some("Num9".into()),
+            11 => Some("Num0".into()),
+            12 => Some("Minus".into()),
+            13 => Some("Equal".into()),
+            16 => Some("BackQuote".into()),
+            // Row 1
+            15 => Some("Tab".into()),
+            17 => Some("KeyQ".into()),
+            18 => Some("KeyW".into()),
+            19 => Some("KeyE".into()),
+            20 => Some("KeyR".into()),
+            21 => Some("KeyT".into()),
+            22 => Some("KeyY".into()),
+            23 => Some("KeyU".into()),
+            24 => Some("KeyI".into()),
+            25 => Some("KeyO".into()),
+            26 => Some("KeyP".into()),
+            27 => Some("LeftBracket".into()),
+            14 => Some("Delete".into()),
+            28 => Some("Return".into()),
+            // Row 2
+            58 => Some("CapsLock".into()),
+            30 => Some("KeyA".into()),
+            31 => Some("KeyS".into()),
+            32 => Some("KeyD".into()),
+            33 => Some("KeyF".into()),
+            34 => Some("KeyG".into()),
+            35 => Some("KeyH".into()),
+            36 => Some("KeyJ".into()),
+            37 => Some("KeyK".into()),
+            38 => Some("KeyL".into()),
+            39 => Some("SemiColon".into()),
+            40 => Some("Quote".into()),
+            43 => Some("BackSlash".into()),
+            // Row 3
+            42 => Some("ShiftLeft".into()),
+            44 => Some("KeyZ".into()),
+            45 => Some("KeyX".into()),
+            46 => Some("KeyC".into()),
+            47 => Some("KeyV".into()),
+            48 => Some("KeyB".into()),
+            49 => Some("KeyN".into()),
+            50 => Some("KeyM".into()),
+            51 => Some("Comma".into()),
+            52 => Some("Dot".into()),
+            53 => Some("Slash".into()),
+            54 => Some("ShiftRight".into()),
+            // Row 4 (bottom row)
+            56 => Some("AltLeft".into()),
+            29 => Some("MetaLeft".into()), // Ctrl on Linux
+            57 => Some("Space".into()),
+            125 => Some("MetaRight".into()),
+            100 => Some("AltRight".into()),
+            86 => Some("BackSlash".into()),
+            // RightBracket after Row 1 Ret (code 28) since Linux uses 28 for Return not RightBracket
+            _ => None,
+        }
+    }
+
+    fn looks_like_keyboard(device: &EvdevDevice) -> bool {
+        let has_keys = device
+            .supported_keys()
+            .map_or(false, |keys| keys.iter().next().is_some());
+        if !has_keys {
+            return false;
+        }
+
+        let has_pointer_axes = device
+            .supported_relative_axes()
+            .map_or(false, |axes| axes.iter().next().is_some())
+            || device
+                .supported_absolute_axes()
+                .map_or(false, |axes| axes.iter().next().is_some());
+        if has_pointer_axes {
+            return false;
+        }
+
+        let name = device.name().unwrap_or("").to_ascii_lowercase();
+        if name.contains("keyboard") || name.contains("keypad") || name.contains("kbd") {
+            return true;
+        }
+
+        device.supported_keys().map_or(false, |keys| {
+            keys.contains(evdev::KeyCode::KEY_A)
+                || keys.contains(evdev::KeyCode::KEY_ENTER)
+                || keys.contains(evdev::KeyCode::KEY_SPACE)
+        })
+    }
+
+    fn find_keyboard_device() -> Option<(PathBuf, EvdevDevice)> {
+        let mut fallback = None;
+        for (path, device) in evdev::enumerate() {
+            if !looks_like_keyboard(&device) {
+                continue;
+            }
+
+            let name = device.name().unwrap_or("").to_ascii_lowercase();
+            if name.contains("keyboard") || name.contains("keypad") || name.contains("kbd") {
+                return Some((path, device));
+            }
+
+            if fallback.is_none() {
+                fallback = Some((path, device));
+            }
+        }
+        fallback
+    }
+
+    pub fn has_keyboard_device() -> bool {
+        x11_keyboard::is_available() || find_keyboard_device().is_some()
+    }
+
+    pub fn start(app_handle: tauri::AppHandle) {
+        let (tx, rx) = mpsc::channel::<String>();
+
+        let handle = app_handle.clone();
+        thread::spawn(move || {
+            for key_name in rx {
+                let _ = handle.emit("key-press", KeyPressEvent { key_code: key_name });
+            }
+        });
+
+        if x11_keyboard::start(tx.clone()) {
+            return;
+        }
+
+        thread::spawn(move || {
+            let (path, mut device) = match find_keyboard_device() {
+                Some(device) => device,
+                None => {
+                    eprintln!(
+                        "Failed to find an accessible keyboard device. Ensure this user can read /dev/input/event*."
+                    );
+                    return;
+                }
+            };
+
+            eprintln!(
+                "Listening on {} ({})",
+                path.display(),
+                device.name().unwrap_or("Unnamed device")
+            );
+
+            if let Err(e) = device.set_nonblocking(true) {
+                eprintln!("Failed to set non-blocking: {}", e);
+            }
+
+            loop {
+                match device.fetch_events() {
+                    Ok(events) => {
+                        for event in events {
+                            if let EventSummary::Key(_, _, 1) = event.destructure() {
+                                let code = event.code();
+                                if let Some(name) = evdev_key_to_string(code) {
+                                    let _ = tx.send(name);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        // no events, continue
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading events: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
+    mod x11_keyboard {
+        use std::collections::HashMap;
+        use std::sync::mpsc;
+
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xinput::{
+            ConnectionExt as XInputConnectionExt, Device, EventMask, XIEventMask,
+        };
+        use x11rb::protocol::xproto::ConnectionExt as XProtoConnectionExt;
+        use x11rb::protocol::Event;
+        use x11rb::rust_connection::RustConnection;
+
+        pub fn is_available() -> bool {
+            connect_xinput().is_ok()
+        }
+
+        pub fn start(tx: mpsc::Sender<String>) -> bool {
+            match connect_xinput() {
+                Ok((conn, screen_num, keymap)) => {
+                    std::thread::spawn(move || listen(conn, screen_num, keymap, tx));
+                    true
+                }
+                Err(e) => {
+                    eprintln!("Failed to start X11 keyboard listener: {e}");
+                    false
+                }
+            }
+        }
+
+        fn connect_xinput() -> Result<(RustConnection, usize, HashMap<u8, String>), Box<dyn std::error::Error>> {
+            let (conn, screen_num) = RustConnection::connect(None)?;
+            conn.xinput_xi_query_version(2, 0)?.reply()?;
+
+            let keymap = build_keymap(&conn)?;
+            let root = conn.setup().roots[screen_num].root;
+            let masks = [EventMask {
+                deviceid: u16::from(Device::ALL_MASTER),
+                mask: vec![XIEventMask::RAW_KEY_PRESS],
+            }];
+            conn.xinput_xi_select_events(root, &masks)?.check()?;
+            conn.flush()?;
+
+            Ok((conn, screen_num, keymap))
+        }
+
+        fn listen(
+            conn: RustConnection,
+            screen_num: usize,
+            mut keymap: HashMap<u8, String>,
+            tx: mpsc::Sender<String>,
+        ) {
+            let root = conn.setup().roots[screen_num].root;
+            eprintln!("Listening on X11/XInput2 raw key events for Barrier-compatible input");
+
+            loop {
+                match conn.wait_for_event() {
+                    Ok(Event::XinputRawKeyPress(event)) => {
+                        let keycode = event.detail as u8;
+                        if let Some(key_name) = keymap.get(&keycode) {
+                            let _ = tx.send(key_name.clone());
+                        }
+                    }
+                    Ok(Event::MappingNotify(_)) => {
+                        if let Ok(next_keymap) = build_keymap(&conn) {
+                            keymap = next_keymap;
+                        }
+                        let masks = [EventMask {
+                            deviceid: u16::from(Device::ALL_MASTER),
+                            mask: vec![XIEventMask::RAW_KEY_PRESS],
+                        }];
+                        let _ = conn.xinput_xi_select_events(root, &masks);
+                        let _ = conn.flush();
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("Error reading X11 keyboard event: {e}");
+                        break;
+                    }
+                }
+            }
+        }
+
+        fn build_keymap<C: Connection>(conn: &C) -> Result<HashMap<u8, String>, Box<dyn std::error::Error>> {
+            let setup = conn.setup();
+            let min = setup.min_keycode;
+            let count = setup.max_keycode - setup.min_keycode + 1;
+            let mapping = conn.get_keyboard_mapping(min, count)?.reply()?;
+            let mut keymap = HashMap::new();
+
+            for offset in 0..count {
+                let keycode = min + offset;
+                let start = offset as usize * mapping.keysyms_per_keycode as usize;
+                let end = start + mapping.keysyms_per_keycode as usize;
+                if let Some(name) = mapping
+                    .keysyms
+                    .get(start..end)
+                    .and_then(|keysyms| keysyms.iter().copied().find_map(keysym_to_key_name))
+                {
+                    keymap.insert(keycode, name);
+                }
+            }
+
+            Ok(keymap)
+        }
+
+        fn keysym_to_key_name(keysym: u32) -> Option<String> {
+            match keysym {
+                0x0061..=0x007a => Some(format!("Key{}", (keysym as u8 as char).to_ascii_uppercase())),
+                0x0041..=0x005a => Some(format!("Key{}", keysym as u8 as char)),
+                0x0030..=0x0039 => Some(format!("Num{}", keysym - 0x0030)),
+                0x0020 => Some("Space".into()),
+                0xff0d => Some("Return".into()),
+                0xff08 => Some("Delete".into()),
+                0xff09 => Some("Tab".into()),
+                0xff1b => Some("Escape".into()),
+                0xffe5 => Some("CapsLock".into()),
+                0xffe1 => Some("ShiftLeft".into()),
+                0xffe2 => Some("ShiftRight".into()),
+                0xffe3 => Some("ControlLeft".into()),
+                0xffe4 => Some("ControlRight".into()),
+                0xffe9 => Some("AltLeft".into()),
+                0xffea => Some("AltRight".into()),
+                0xffeb => Some("MetaLeft".into()),
+                0xffec => Some("MetaRight".into()),
+                0x002d => Some("Minus".into()),
+                0x003d => Some("Equal".into()),
+                0x005b => Some("LeftBracket".into()),
+                0x005d => Some("RightBracket".into()),
+                0x005c => Some("BackSlash".into()),
+                0x003b => Some("SemiColon".into()),
+                0x0027 => Some("Quote".into()),
+                0x0060 => Some("BackQuote".into()),
+                0x002c => Some("Comma".into()),
+                0x002e => Some("Dot".into()),
+                0x002f => Some("Slash".into()),
+                _ => None,
+            }
+        }
+    }
+}
+
+// =============================================================================
 // Accessibility permission check (macOS)
 // =============================================================================
 
@@ -412,7 +750,11 @@ fn check_accessibility() -> bool {
     {
         unsafe { AXIsProcessTrusted() }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_keyboard::has_keyboard_device()
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
     {
         true
     }
@@ -444,6 +786,9 @@ fn start_keyboard_listener(app_handle: tauri::AppHandle) {
 
     #[cfg(target_os = "windows")]
     win_keyboard::start(app_handle);
+
+    #[cfg(target_os = "linux")]
+    linux_keyboard::start(app_handle);
 }
 
 // --- Window / Tray / Shortcut ---

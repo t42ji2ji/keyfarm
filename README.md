@@ -14,6 +14,7 @@ Go to the [Releases](https://github.com/t42ji2ji/keyfarm/releases) page and down
 
 - **macOS** — `KeyFarm_x.x.x_universal.dmg`
 - **Windows** — `KeyFarm_x.x.x_x64-setup.exe`
+- **Linux** — `KeyFarm_x.x.x_amd64.AppImage` or `KeyFarm_x.x.x_amd64.deb`
 
 > macOS users: After opening the DMG, drag KeyFarm to Applications. On first launch, right-click the app and select "Open" to bypass Gatekeeper.
 
@@ -57,6 +58,10 @@ Switch to heatmap mode to see which keys you use the most. The height and color 
 ## Permissions
 
 KeyFarm needs **Accessibility** permission on macOS to detect keystrokes. The app will prompt you to grant this on first launch.
+
+On Linux, KeyFarm reads from `/dev/input/event*`. If it cannot see a keyboard device, add your user to the `input` group or adjust your system's input-device permissions.
+
+Linux input support defaults to **X11/XInput2**, which also works with Barrier/Synergy-style keyboard sharing on an X11 client session. Wayland sessions are not the default supported path yet.
 
 ## Development
 
