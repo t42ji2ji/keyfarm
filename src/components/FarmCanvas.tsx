@@ -145,8 +145,12 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
   const overlayRef = useRef<HTMLDivElement>(null);
   const cellBlocksRef = useRef<Map<string, IsoBlock>>(new Map());
   const rafRef = useRef<number>(0);
+  const drawRef = useRef<() => void>(() => {});
   const gameStateRef = useRef(gameState);
-  gameStateRef.current = gameState;
+
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
 
   useEffect(() => {
     return () => {
@@ -167,6 +171,10 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
     startTime: 0,
   });
   const flipFactorRef = useRef(1);
+
+  const scheduleDraw = useCallback(() => {
+    rafRef.current = requestAnimationFrame(() => drawRef.current());
+  }, []);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -219,7 +227,7 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
       });
 
       if (hasActiveAnimations) {
-        rafRef.current = requestAnimationFrame(draw);
+        scheduleDraw();
       }
       return;
     }
@@ -390,9 +398,13 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
     hasActiveAnimations = true; // Keep loop alive for farmer + ducks + dog + cat
 
     if (hasActiveAnimations) {
-      rafRef.current = requestAnimationFrame(draw);
+      scheduleDraw();
     }
-  }, [animations, viewMode, onHarvest, onRemovePest, onFertilize, onDuckEaten, onDuckAttacked, onWaterToFish, onDogScared]);
+  }, [animations, canvasHeight, canvasWidth, viewMode, onHarvest, onRemovePest, onFertilize, onDuckEaten, onDuckAttacked, onWaterToFish, onDogScared, scheduleDraw]);
+
+  useEffect(() => {
+    drawRef.current = draw;
+  }, [draw]);
 
   // Kick off flip animation when flipX changes
   useEffect(() => {
@@ -404,24 +416,22 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
         startTime: performance.now(),
       };
       cancelAnimationFrame(rafRef.current);
-      rafRef.current = requestAnimationFrame(draw);
+      scheduleDraw();
     }
-  }, [flipX, draw]);
+  }, [flipX, scheduleDraw]);
 
   useEffect(() => {
     cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(draw);
+    scheduleDraw();
     return () => cancelAnimationFrame(rafRef.current);
-  }, [gameState, draw]);
+  }, [gameState, scheduleDraw]);
 
   const harvestedRef = useRef<Set<string>>(new Set());
-  const viewModeRef = useRef(viewMode);
-  viewModeRef.current = viewMode;
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    if (viewModeRef.current === 'heatmap') { canvas.style.cursor = 'default'; return; }
+    if (viewMode === 'heatmap') { canvas.style.cursor = 'default'; return; }
     const { x, y } = canvasCoords(e, canvas, canvasWidth, canvasHeight);
 
     // Update mouse grid position for duck flee behavior
@@ -443,7 +453,7 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
             harvestedRef.current.add(keyCode + '_pest');
             onRemovePest(keyCode);
             cancelAnimationFrame(rafRef.current);
-            rafRef.current = requestAnimationFrame(draw);
+            scheduleDraw();
           }
         } else {
           harvestedRef.current.delete(keyCode + '_pest');
@@ -455,7 +465,7 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
             harvestedRef.current.add(keyCode);
             onHarvest(keyCode);
             cancelAnimationFrame(rafRef.current);
-            rafRef.current = requestAnimationFrame(draw);
+            scheduleDraw();
           }
         }
       } else {
@@ -464,7 +474,7 @@ export function FarmCanvas({ gameState, animations, onHarvest, onRemovePest, onF
       }
     }
     canvas.style.cursor = overFruit ? 'grab' : 'default';
-  }, [onHarvest, onRemovePest, draw]);
+  }, [canvasHeight, canvasWidth, onHarvest, onRemovePest, scheduleDraw, viewMode]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();

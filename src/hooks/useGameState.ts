@@ -36,6 +36,11 @@ const STORE_KEY = 'gameState';
 const store = new LazyStore('store.json');
 const DAILY_STATS_MAX_DAYS = 14;
 
+type LegacyFarmCell = Omit<FarmCell, 'cropId'> & {
+  cropId?: string | null;
+  fruitType?: string | null;
+};
+
 function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
@@ -82,15 +87,15 @@ function parseState(raw: unknown): GameState {
   if (raw && typeof raw === 'object') {
     const parsed = raw as Record<string, unknown>;
 
-    let cells = (parsed.cells as Record<string, FarmCell>) ?? createInitialCells();
+    const cells = (parsed.cells as Record<string, FarmCell>) ?? createInitialCells();
 
     // Migrate old fruitType -> cropId
     for (const [key, cell] of Object.entries(cells)) {
-      const anyCell = cell as any;
-      if ('fruitType' in anyCell && !('cropId' in anyCell)) {
-        cells[key] = {
-          ...anyCell,
-          cropId: anyCell.fruitType,
+      const legacyCell = cell as LegacyFarmCell;
+      if ('fruitType' in legacyCell && !('cropId' in legacyCell)) {
+        const migratedCell = {
+          ...legacyCell,
+          cropId: legacyCell.fruitType ?? null,
           isGolden: false,
           fallowUntil: null,
           harvestTimestamps: [],
@@ -100,10 +105,11 @@ function parseState(raw: unknown): GameState {
           preOverworkedStage: null,
           preOverworkedHitCount: 0,
         };
-        delete (cells[key] as any).fruitType;
+        delete migratedCell.fruitType;
+        cells[key] = migratedCell;
       }
       // Also ensure new fields exist on cells that already have cropId
-      if (!('isGolden' in anyCell)) {
+      if (!('isGolden' in legacyCell)) {
         cells[key] = {
           ...cells[key],
           isGolden: false,
@@ -637,7 +643,7 @@ export function useGameState() {
       const nextStage = NEXT_STAGE[c.stage];
       if (!nextStage) return prev;
 
-      let newCropId = c.cropId;
+      const newCropId = c.cropId;
       let newIsGolden = c.isGolden;
 
       // If advancing to fruit, roll for golden
